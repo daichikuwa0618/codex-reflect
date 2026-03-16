@@ -5,6 +5,22 @@ All notable changes to claude-reflect will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-03-16
+
+### Added
+- **Comprehensive CJK support** — Pattern detection now works for Chinese, Japanese, and Korean (#24, thanks @shohu and @yulin0629)
+  - 13 CJK correction patterns: Japanese (8), Chinese (3), Korean (2)
+  - Full-width `？` and CJK question particles (`嗎吗呢か까`) in false positive filter
+  - CJK-aware short message threshold (2 chars for CJK vs 4 for ASCII)
+  - Non-correction English phrase filter (`No problem`, `don't worry`, `never mind`, etc.)
+- **Per-project queue scoping** — Learnings queue is now stored per-project to prevent cross-contamination (#21, thanks @marcodelpin)
+  - Queue files at `~/.claude/projects/<encoded>/learnings-queue.json`
+  - Automatic migration from legacy global queue on first access
+  - Updated `/view-queue`, `/skip-reflect`, `/reflect` commands
+
+### Fixed
+- Windows CI: path encoding tests now platform-agnostic (no longer hardcode Unix paths)
+
 ## [3.0.1] - 2026-02-12
 
 ### Added

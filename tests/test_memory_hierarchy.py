@@ -267,19 +267,23 @@ class TestAutoMemoryPath(unittest.TestCase):
     def test_folder_name_encoding_unix(self):
         """Test project folder name encoding for Unix paths."""
         result = get_project_folder_name("/Users/bob/myapp")
-        self.assertEqual(result, "-Users-bob-myapp")
+        # Path.resolve() may prepend drive letter on Windows, so compute expected dynamically
+        resolved = str(Path("/Users/bob/myapp").resolve()).replace("/", "-").replace("\\", "-").lstrip("-")
+        self.assertEqual(result, "-" + resolved)
 
     def test_folder_name_encoding_deep(self):
         """Test project folder name encoding for deep paths."""
         result = get_project_folder_name("/Users/bob/code/projects/myapp")
-        self.assertEqual(result, "-Users-bob-code-projects-myapp")
+        resolved = str(Path("/Users/bob/code/projects/myapp").resolve()).replace("/", "-").replace("\\", "-").lstrip("-")
+        self.assertEqual(result, "-" + resolved)
 
     @patch("lib.reflect_utils.get_claude_dir")
     def test_auto_memory_path_resolution(self, mock_claude_dir):
         """Test auto memory path is correctly resolved."""
         mock_claude_dir.return_value = Path("/home/user/.claude")
         path = get_auto_memory_path("/Users/bob/myapp")
-        self.assertEqual(path, Path("/home/user/.claude/projects/-Users-bob-myapp/memory"))
+        expected_folder = get_project_folder_name("/Users/bob/myapp")
+        self.assertEqual(path, Path("/home/user/.claude/projects") / expected_folder / "memory")
 
     def test_read_auto_memory_empty(self):
         """Test reading auto memory from nonexistent directory."""
