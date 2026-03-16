@@ -16,14 +16,11 @@ from lib.reflect_utils import get_queue_path, get_backup_dir, load_queue, backup
 
 def main() -> int:
     """Main entry point."""
-    queue_path = get_queue_path()
-
-    if not queue_path.exists():
-        return 0
-
     items = load_queue()
     if not items:
         return 0
+
+    queue_path = get_queue_path()
 
     # Create backup directory if needed
     backup_dir = get_backup_dir()
@@ -31,7 +28,10 @@ def main() -> int:
 
     # Save backup with timestamp
     backup_file = backup_dir / f"pre-compact-{backup_timestamp()}.json"
-    backup_file.write_text(queue_path.read_text(encoding="utf-8"), encoding="utf-8")
+    backup_file.write_text(
+        queue_path.read_text(encoding="utf-8") if queue_path.exists() else "[]",
+        encoding="utf-8",
+    )
 
     # Output informational message (non-blocking)
     print()

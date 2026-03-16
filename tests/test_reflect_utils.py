@@ -37,8 +37,25 @@ class TestPathUtilities(unittest.TestCase):
     """Tests for path utility functions."""
 
     def test_get_queue_path(self):
-        """Test queue path returns correct location."""
+        """Test queue path returns correct per-project location."""
         path = get_queue_path()
+        self.assertIsInstance(path, Path)
+        self.assertEqual(path.name, "learnings-queue.json")
+        # Queue is now per-project: ~/.claude/projects/<encoded>/learnings-queue.json
+        self.assertIn("projects", path.parts)
+
+    def test_get_queue_path_explicit_project(self):
+        """Test queue path with explicit project directory."""
+        path = get_queue_path("/tmp/test-project")
+        self.assertIsInstance(path, Path)
+        self.assertEqual(path.name, "learnings-queue.json")
+        self.assertIn("projects", path.parts)
+        self.assertIn("-tmp-test-project", str(path))
+
+    def test_get_global_queue_path(self):
+        """Test legacy global queue path."""
+        from lib.reflect_utils import get_global_queue_path
+        path = get_global_queue_path()
         self.assertIsInstance(path, Path)
         self.assertEqual(path.name, "learnings-queue.json")
         self.assertEqual(path.parent.name, ".claude")

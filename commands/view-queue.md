@@ -4,7 +4,8 @@ allowed-tools: Bash, Read
 ---
 
 ## Context
-- Queue file: `~/.claude/learnings-queue.json`
+- Queue file: per-project at `~/.claude/projects/<encoded-cwd>/learnings-queue.json`
+- Legacy global queue (`~/.claude/learnings-queue.json`) is auto-migrated on first access
 
 ## Your Task
 
@@ -39,9 +40,9 @@ or corrections will be auto-detected. Run /reflect to process.
 
 ## Implementation
 
-**Step 1: Read the queue file:**
+**Step 1: Read the project-scoped queue file:**
 ```bash
-cat ~/.claude/learnings-queue.json 2>/dev/null || echo "[]"
+python3 scripts/read_queue.py 2>/dev/null || echo "[]"
 ```
 
 **Step 2: Parse and format each item with:**

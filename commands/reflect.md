@@ -17,7 +17,7 @@ allowed-tools: Read, Edit, Write, Glob, Bash, Grep, AskUserQuestion, TodoWrite
 ## Context
 - Project CLAUDE.md: @CLAUDE.md
 - Global CLAUDE.md: @~/.claude/CLAUDE.md
-- Learnings queue: !`cat ~/.claude/learnings-queue.json 2>/dev/null || echo "[]"`
+- Learnings queue (per-project): !`python3 "$(dirname "$(dirname "$(readlink -f "$0")")")/scripts/read_queue.py" 2>/dev/null || echo "[]"`
 - Current project: !`pwd`
 
 ## Multi-Target Export

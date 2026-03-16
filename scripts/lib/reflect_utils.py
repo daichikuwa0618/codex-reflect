@@ -14,9 +14,83 @@ from typing import List, Dict, Any, Optional, Tuple
 # Path utilities
 # =============================================================================
 
-def get_queue_path() -> Path:
-    """Get path to learnings queue file."""
+def get_queue_path(project_dir: Optional[str] = None) -> Path:
+    """Get path to learnings queue file, scoped to the current project.
+
+    Queue files are stored per-project to prevent cross-project leakage:
+      ~/.claude/projects/<encoded>/learnings-queue.json
+
+    Falls back to global path if project directory cannot be determined.
+    """
+    try:
+        folder_name = get_project_folder_name(project_dir)
+        return get_claude_dir() / "projects" / folder_name / "learnings-queue.json"
+    except Exception:
+        # Fallback to global path if encoding fails
+        return Path.home() / ".claude" / "learnings-queue.json"
+
+
+def get_global_queue_path() -> Path:
+    """Get path to the legacy global learnings queue file.
+
+    Used for migration: items from the old global queue are distributed
+    to their per-project queues on first access.
+    """
     return Path.home() / ".claude" / "learnings-queue.json"
+
+
+def migrate_global_queue() -> None:
+    """Migrate items from the legacy global queue to per-project queues.
+
+    Each queue item has a 'project' field with the original cwd.
+    Items are distributed to their respective project queues, then
+    the global queue is cleared.
+    """
+    global_path = get_global_queue_path()
+    if not global_path.exists():
+        return
+
+    try:
+        items = json.loads(global_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, IOError):
+        return
+
+    if not items:
+        return
+
+    # Group items by project
+    by_project: Dict[str, List[Dict[str, Any]]] = {}
+    for item in items:
+        project = item.get("project", "")
+        if project not in by_project:
+            by_project[project] = []
+        by_project[project].append(item)
+
+    # Write each group to its project queue
+    for project, project_items in by_project.items():
+        if not project:
+            continue
+        try:
+            project_queue_path = get_queue_path(project)
+            # Merge with any existing project queue
+            existing = []
+            if project_queue_path.exists():
+                try:
+                    existing = json.loads(
+                        project_queue_path.read_text(encoding="utf-8")
+                    )
+                except (json.JSONDecodeError, IOError):
+                    existing = []
+            existing.extend(project_items)
+            project_queue_path.parent.mkdir(parents=True, exist_ok=True)
+            project_queue_path.write_text(
+                json.dumps(existing, indent=2), encoding="utf-8"
+            )
+        except Exception:
+            continue
+
+    # Clear global queue after successful migration
+    global_path.write_text("[]", encoding="utf-8")
 
 
 def get_backup_dir() -> Path:
@@ -393,9 +467,15 @@ def read_all_memory_entries(
 # Queue operations
 # =============================================================================
 
-def load_queue() -> List[Dict[str, Any]]:
-    """Load learnings queue from file."""
-    path = get_queue_path()
+def load_queue(project_dir: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Load learnings queue from the project-scoped file.
+
+    On first call, migrates any items from the legacy global queue.
+    """
+    # Migrate legacy global queue if it has items
+    migrate_global_queue()
+
+    path = get_queue_path(project_dir)
     if not path.exists():
         return []
     try:
@@ -404,18 +484,18 @@ def load_queue() -> List[Dict[str, Any]]:
         return []
 
 
-def save_queue(items: List[Dict[str, Any]]) -> None:
-    """Save learnings queue to file."""
-    path = get_queue_path()
+def save_queue(items: List[Dict[str, Any]], project_dir: Optional[str] = None) -> None:
+    """Save learnings queue to the project-scoped file."""
+    path = get_queue_path(project_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(items, indent=2), encoding="utf-8")
 
 
-def append_to_queue(item: Dict[str, Any]) -> None:
-    """Append a single item to the queue."""
-    items = load_queue()
+def append_to_queue(item: Dict[str, Any], project_dir: Optional[str] = None) -> None:
+    """Append a single item to the project-scoped queue."""
+    items = load_queue(project_dir)
     items.append(item)
-    save_queue(items)
+    save_queue(items, project_dir)
 
 
 # =============================================================================
