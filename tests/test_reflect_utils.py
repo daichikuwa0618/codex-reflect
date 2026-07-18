@@ -525,7 +525,7 @@ class TestQueueItemCreation(unittest.TestCase):
 
 
 class TestSessionExtraction(unittest.TestCase):
-    """Tests for session file extraction."""
+    """Tests for the backward-compatible user-message API."""
 
     def setUp(self):
         """Create temporary session file."""
@@ -537,114 +537,97 @@ class TestSessionExtraction(unittest.TestCase):
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_extract_user_messages_basic(self):
-        """Test extracting basic user messages."""
+    def _write_codex_session(self, records):
         session_data = [
             {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "Hello world"}]
-                }
+                "type": "session_meta",
+                "payload": {
+                    "id": "session-1",
+                    "cwd": self.temp_dir,
+                    "timestamp": "2026-07-18T00:00:00Z",
+                },
             },
-            {
-                "type": "assistant",
-                "message": {"content": "Response"}
-            },
-            {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "no, use Python instead"}]
-                }
-            },
+            *records,
         ]
+        self.session_file.write_text(
+            "".join(json.dumps(entry) + "\n" for entry in session_data),
+            encoding="utf-8",
+        )
 
-        with open(self.session_file, "w") as f:
-            for entry in session_data:
-                f.write(json.dumps(entry) + "\n")
+    def test_extract_user_messages_basic(self):
+        self._write_codex_session([
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "Hello world"},
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "no, use Python instead"}
+                    ],
+                },
+            },
+        ])
 
         messages = extract_user_messages(self.session_file)
         self.assertEqual(len(messages), 2)
         self.assertEqual(messages[0], "Hello world")
         self.assertEqual(messages[1], "no, use Python instead")
 
-    def test_extract_user_messages_string_content(self):
-        """Test extracting user messages when content is a string (not list)."""
-        session_data = [
+    def test_extract_user_messages_filters_non_text_response_content(self):
+        self._write_codex_session([
             {
-                "type": "user",
-                "message": {
-                    "content": "This is a string content message"
-                }
-            },
-            {
-                "type": "user",
-                "message": {
-                    "content": "no, use this approach instead"
-                }
-            },
-        ]
-
-        with open(self.session_file, "w") as f:
-            for entry in session_data:
-                f.write(json.dumps(entry) + "\n")
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "output_text", "text": "ignored"},
+                        {"type": "input_text", "text": "included"},
+                    ],
+                },
+            }
+        ])
 
         messages = extract_user_messages(self.session_file)
-        self.assertEqual(len(messages), 2)
-        self.assertEqual(messages[0], "This is a string content message")
-        self.assertEqual(messages[1], "no, use this approach instead")
+        self.assertEqual(messages, ["included"])
 
-    def test_extract_user_messages_skip_meta(self):
-        """Test that isMeta messages are skipped."""
-        session_data = [
+    def test_extract_user_messages_does_not_guess_unknown_records(self):
+        self._write_codex_session([
             {
-                "type": "user",
-                "isMeta": True,
-                "message": {
-                    "content": [{"type": "text", "text": "Meta message"}]
-                }
+                "type": "future_record",
+                "payload": {"message": "no, guessed from unknown schema"},
             },
             {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "Regular message"}]
-                }
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "Regular message"},
             },
-        ]
-
-        with open(self.session_file, "w") as f:
-            for entry in session_data:
-                f.write(json.dumps(entry) + "\n")
+        ])
 
         messages = extract_user_messages(self.session_file)
-        self.assertEqual(len(messages), 1)
-        self.assertEqual(messages[0], "Regular message")
+        self.assertEqual(messages, ["Regular message"])
 
     def test_extract_corrections_only(self):
-        """Test extracting only correction messages."""
-        session_data = [
+        self._write_codex_session([
             {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "Hello world"}]
-                }
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "Hello world"},
             },
             {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "no, use Python"}]
-                }
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "no, use Python"},
             },
             {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "remember: always test"}]
-                }
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": "remember: always test",
+                },
             },
-        ]
-
-        with open(self.session_file, "w") as f:
-            for entry in session_data:
-                f.write(json.dumps(entry) + "\n")
+        ])
 
         messages = extract_user_messages(self.session_file, corrections_only=True)
         self.assertEqual(len(messages), 2)
@@ -658,7 +641,7 @@ class TestSessionExtraction(unittest.TestCase):
 
 
 class TestToolRejectionExtraction(unittest.TestCase):
-    """Tests for tool rejection extraction."""
+    """Codex has no confirmed dedicated user-rejection record yet."""
 
     def setUp(self):
         """Create temporary session file."""
@@ -670,80 +653,42 @@ class TestToolRejectionExtraction(unittest.TestCase):
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_extract_tool_rejection_with_feedback(self):
-        """Test extracting tool rejection with user feedback."""
-        # Schema matches actual Claude Code session files:
-        # type=user, message.content[].type=tool_result, is_error=true
+    def _write_codex_session(self, records):
         session_data = [
-            {
-                "type": "user",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "is_error": True,
-                            "content": "The user doesn't want to proceed\nthe user said:\nDon't delete that file"
-                        }
-                    ]
-                }
-            },
+            {"type": "session_meta", "payload": {"id": "session-1"}},
+            *records,
         ]
+        self.session_file.write_text(
+            "".join(json.dumps(entry) + "\n" for entry in session_data),
+            encoding="utf-8",
+        )
 
-        with open(self.session_file, "w") as f:
-            for entry in session_data:
-                f.write(json.dumps(entry) + "\n")
-
-        rejections = extract_tool_rejections(self.session_file)
-        self.assertEqual(len(rejections), 1)
-        self.assertEqual(rejections[0], "Don't delete that file")
-
-    def test_extract_tool_rejection_empty_feedback(self):
-        """Test that empty feedback is skipped."""
-        session_data = [
+    def test_does_not_infer_rejection_from_generic_user_text(self):
+        self._write_codex_session([
             {
-                "type": "user",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "is_error": True,
-                            "content": "The user doesn't want to proceed\nthe user said:\n"
-                        }
-                    ]
-                }
-            },
-        ]
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": "Don't run that command",
+                },
+            }
+        ])
 
-        with open(self.session_file, "w") as f:
-            for entry in session_data:
-                f.write(json.dumps(entry) + "\n")
+        self.assertEqual(extract_tool_rejections(self.session_file), [])
 
-        rejections = extract_tool_rejections(self.session_file)
-        self.assertEqual(len(rejections), 0)
-
-    def test_extract_non_rejection_tool_result(self):
-        """Test that normal tool results are ignored."""
-        session_data = [
+    def test_does_not_infer_rejection_from_turn_abort_or_tool_output(self):
+        self._write_codex_session([
+            {"type": "event_msg", "payload": {"type": "turn_aborted"}},
             {
-                "type": "user",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "is_error": False,
-                            "content": "File created successfully"
-                        }
-                    ]
-                }
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "output": "The user rejected this tool call",
+                },
             },
-        ]
+        ])
 
-        with open(self.session_file, "w") as f:
-            for entry in session_data:
-                f.write(json.dumps(entry) + "\n")
-
-        rejections = extract_tool_rejections(self.session_file)
-        self.assertEqual(len(rejections), 0)
+        self.assertEqual(extract_tool_rejections(self.session_file), [])
 
 
 class TestClaudeFileDiscovery(unittest.TestCase):

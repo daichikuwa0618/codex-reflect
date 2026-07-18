@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract user corrections from tool rejections in session files.
+"""Extract confirmed user tool rejections from Codex session files.
 
 Cross-platform compatible (Windows, macOS, Linux).
 Usage: python extract_tool_rejections.py <session-file>

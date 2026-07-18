@@ -23,42 +23,35 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from lib.codex_history import list_session_files, parse_transcript
 from lib.reflect_utils import (
     extract_tool_errors,
     aggregate_tool_errors,
-    get_claude_dir,
-    get_project_folder_name,
 )
 
 
 def find_session_files(project_dir: str = None, all_projects: bool = False) -> list:
-    """Find session files to scan."""
-    claude_dir = get_claude_dir()
-    projects_dir = claude_dir / "projects"
-
-    if not projects_dir.exists():
+    """Find active and archived Codex session files to scan."""
+    session_files = list_session_files()
+    if all_projects:
+        return session_files
+    if not project_dir:
         return []
 
-    if all_projects:
-        # Scan all project directories
-        session_files = list(projects_dir.glob("*/*.jsonl"))
-    elif project_dir:
-        # Find the project folder matching the directory
-        folder_name = get_project_folder_name(project_dir)
-
-        project_folder = projects_dir / folder_name
-        if project_folder.exists():
-            session_files = list(project_folder.glob("*.jsonl"))
-        else:
-            # Try partial match
-            session_files = []
-            for d in projects_dir.iterdir():
-                if d.is_dir() and project_dir.split("/")[-1] in d.name:
-                    session_files.extend(d.glob("*.jsonl"))
-    else:
-        session_files = []
-
-    return sorted(session_files, key=lambda p: p.stat().st_mtime, reverse=True)
+    target = os.path.normcase(
+        str(Path(project_dir).expanduser().resolve())
+    )
+    matching = []
+    for session_file in session_files:
+        result = parse_transcript(session_file)
+        if not result.supported or not result.cwd:
+            continue
+        cwd = os.path.normcase(
+            str(Path(result.cwd).expanduser().resolve())
+        )
+        if cwd == target:
+            matching.append(session_file)
+    return matching
 
 
 def main() -> int:

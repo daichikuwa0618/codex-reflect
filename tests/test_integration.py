@@ -652,17 +652,15 @@ class TestExtractSessionLearnings(unittest.TestCase):
         self.assertIn("Hello world", stdout)
 
     def test_python_extracts_user_messages(self):
-        """Test Python script extracts user messages."""
+        """Test Python script extracts confirmed Codex user-message shapes."""
         self._create_session_file([
             {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "Hello world"}]
-                }
+                "type": "session_meta",
+                "payload": {"id": "session-1", "cwd": self.temp_dir},
             },
             {
-                "type": "assistant",
-                "message": {"content": "Response"}
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "Hello world"},
             },
         ])
 
@@ -701,20 +699,23 @@ class TestExtractSessionLearnings(unittest.TestCase):
         self.assertIn("Regular message", stdout)
 
     def test_python_skips_meta_messages(self):
-        """Test Python script skips isMeta messages."""
+        """Test Python script ignores non-user Codex response items."""
         self._create_session_file([
             {
-                "type": "user",
-                "isMeta": True,
-                "message": {
-                    "content": [{"type": "text", "text": "Meta message"}]
-                }
+                "type": "session_meta",
+                "payload": {"id": "session-1", "cwd": self.temp_dir},
             },
             {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "Regular message"}]
-                }
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "input_text", "text": "Meta message"}],
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "Regular message"},
             },
         ])
 
@@ -756,16 +757,20 @@ class TestExtractSessionLearnings(unittest.TestCase):
         """Test Python script --corrections-only flag."""
         self._create_session_file([
             {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "Hello world"}]
-                }
+                "type": "session_meta",
+                "payload": {"id": "session-1", "cwd": self.temp_dir},
             },
             {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "no, use Python"}]
-                }
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "Hello world"},
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "no, use Python"}],
+                },
             },
         ])
 
@@ -831,102 +836,6 @@ class TestCapturePatternEquivalence(unittest.TestCase):
             with self.subTest(msg=msg):
                 # Pattern matching tested in test_reflect_utils.py
                 pass
-
-
-@skip_on_windows
-class TestBashPythonOutputEquivalence(unittest.TestCase):
-    """Tests to verify bash and Python produce equivalent output."""
-
-    def setUp(self):
-        """Set up test fixtures."""
-        self.temp_dir = tempfile.mkdtemp()
-        self.session_file = Path(self.temp_dir) / "test-session.jsonl"
-
-    def tearDown(self):
-        """Clean up temporary files."""
-        import shutil
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    def _create_session_file(self, entries: list):
-        """Create a session file with given entries."""
-        with open(self.session_file, "w") as f:
-            for entry in entries:
-                f.write(json.dumps(entry) + "\n")
-
-    def test_extract_same_messages(self):
-        """Test bash and Python extract the same messages."""
-        self._create_session_file([
-            {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "First message"}]
-                }
-            },
-            {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "Second message"}]
-                }
-            },
-            {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "no, use Python"}]
-                }
-            },
-        ])
-
-        bash_stdout, _, _ = run_bash_script(
-            BASH_SCRIPTS["extract_session_learnings"],
-            args=[str(self.session_file)]
-        )
-        python_stdout, _, _ = run_python_script(
-            PYTHON_SCRIPTS["extract_session_learnings"],
-            args=[str(self.session_file)]
-        )
-
-        # Both should extract the same messages
-        bash_lines = set(bash_stdout.strip().split("\n"))
-        python_lines = set(python_stdout.strip().split("\n"))
-
-        self.assertEqual(bash_lines, python_lines)
-
-    def test_extract_same_corrections(self):
-        """Test bash and Python extract the same corrections."""
-        self._create_session_file([
-            {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "Hello world"}]
-                }
-            },
-            {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "no, use Python instead"}]
-                }
-            },
-            {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "remember: always test"}]
-                }
-            },
-        ])
-
-        bash_stdout, _, _ = run_bash_script(
-            BASH_SCRIPTS["extract_session_learnings"],
-            args=[str(self.session_file), "--corrections-only"]
-        )
-        python_stdout, _, _ = run_python_script(
-            PYTHON_SCRIPTS["extract_session_learnings"],
-            args=[str(self.session_file), "--corrections-only"]
-        )
-
-        bash_lines = set(bash_stdout.strip().split("\n")) if bash_stdout.strip() else set()
-        python_lines = set(python_stdout.strip().split("\n")) if python_stdout.strip() else set()
-
-        self.assertEqual(bash_lines, python_lines)
 
 
 if __name__ == "__main__":

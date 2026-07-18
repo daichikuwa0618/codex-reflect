@@ -10,6 +10,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 
+from .codex_history import parse_transcript
 from .codex_paths import get_project_state_dir
 from .state_store import StateStore
 
@@ -767,7 +768,7 @@ def create_queue_item(
 
 def extract_user_messages(session_file: Path, corrections_only: bool = False) -> List[str]:
     """
-    Extract user messages from a Claude Code session file (JSONL format).
+    Extract user messages from a supported Codex session file.
 
     Args:
         session_file: Path to the session JSONL file
@@ -779,44 +780,14 @@ def extract_user_messages(session_file: Path, corrections_only: bool = False) ->
     if not session_file.exists():
         return []
 
-    messages = []
-
-    try:
-        with open(session_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                # Filter: type=user, not isMeta
-                if entry.get("type") != "user":
-                    continue
-                if entry.get("isMeta"):
-                    continue
-
-                # Extract text from content (can be string or list)
-                content = entry.get("message", {}).get("content", [])
-
-                # Handle string content directly
-                if isinstance(content, str):
-                    if content and _should_include_message(content):
-                        messages.append(content)
-                # Handle list of content items
-                elif isinstance(content, list):
-                    for item in content:
-                        if isinstance(item, dict) and item.get("type") == "text":
-                            text = item.get("text", "")
-                            if text:
-                                # Apply filters (same as bash script)
-                                if _should_include_message(text):
-                                    messages.append(text)
-    except IOError:
+    result = parse_transcript(session_file)
+    if not result.supported:
         return []
+    messages = [
+        message
+        for message in result.user_messages
+        if _should_include_message(message)
+    ]
 
     if corrections_only:
         # Filter for correction patterns
@@ -871,99 +842,37 @@ _should_include_message = should_include_message
 
 def extract_tool_rejections(session_file: Path) -> List[str]:
     """
-    Extract user corrections from tool rejections in session files.
+    Return confirmed user tool rejections from a Codex session.
 
-    Matches the behavior of the legacy bash script which looks for:
-    - type == "user" entries
-    - message.content[] array with type == "tool_result"
-    - is_error == true
-    - content containing "The user doesn't want to proceed"
+    Current supported Codex transcripts have no dedicated rejection record.
+    Generic user messages, turn-aborted events, and tool output text are not
+    treated as rejections because doing so would guess at schema semantics.
 
     Args:
         session_file: Path to the session JSONL file
 
     Returns:
-        List of user correction texts from tool rejections
+        An empty list until a dedicated Codex rejection shape is confirmed
     """
     if not session_file.exists():
         return []
-
-    rejections = []
-
-    try:
-        with open(session_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                # Must be a user entry (matches bash: select(.type=="user"))
-                if entry.get("type") != "user":
-                    continue
-
-                # Get message.content array (matches bash: select(.message.content | type == "array"))
-                content = entry.get("message", {}).get("content", [])
-                if not isinstance(content, list):
-                    continue
-
-                # Look for tool_result items in content array
-                for item in content:
-                    if not isinstance(item, dict):
-                        continue
-
-                    # Must be type == "tool_result" (matches bash: select(.type=="tool_result"))
-                    if item.get("type") != "tool_result":
-                        continue
-
-                    # Must have is_error == true (matches bash: select(.is_error==true))
-                    if not item.get("is_error"):
-                        continue
-
-                    # Get the content string
-                    tool_content = item.get("content", "")
-                    if not isinstance(tool_content, str):
-                        continue
-
-                    # Must contain rejection message (matches bash: select(.content | contains(...)))
-                    if "The user doesn't want to proceed" not in tool_content:
-                        continue
-
-                    # Extract text after "the user said:" (matches bash: awk '/the user said:/{getline; print}')
-                    # Note: bash uses lowercase "the user said:", let's be case-insensitive
-                    lower_content = tool_content.lower()
-                    if "the user said:" in lower_content:
-                        # Find the position case-insensitively
-                        idx = lower_content.find("the user said:")
-                        after_marker = tool_content[idx + len("the user said:"):]
-                        # Get the next line (bash uses getline)
-                        lines = after_marker.strip().split("\n")
-                        if lines and lines[0].strip():
-                            rejections.append(lines[0].strip())
-
-    except IOError:
-        return []
-
-    return rejections
+    parse_transcript(session_file)
+    return []
 
 
 # =============================================================================
 # Tool execution error patterns
 # =============================================================================
 
-# EXCLUDE: Claude Code guardrails AND global Claude behavior (not project-specific)
+# EXCLUDE: generic agent guardrails and non-project-specific tool behavior
 TOOL_ERROR_EXCLUDE_PATTERNS = [
-    # Claude Code guardrails - system enforcing its rules
+    # Agent guardrails - system enforcing its rules
     r"File has not been read yet",
     r"exceeds maximum allowed tokens",
     r"InputValidationError",
     r"not valid JSON",
     r"The user doesn't want to proceed",  # User rejections handled separately
-    # Global Claude behavior issues - not project-specific
+    # Global agent behavior issues - not project-specific
     r"unexpected EOF while looking for matching",  # Bash quoting
     r"EISDIR|illegal operation on a directory",    # File vs dir confusion
     r"syntax error.*eval",                          # Bash syntax errors
@@ -1008,12 +917,7 @@ def extract_tool_errors(
     project_specific_only: bool = True
 ) -> List[Dict[str, Any]]:
     """
-    Extract tool execution errors from session files.
-
-    Unlike extract_tool_rejections(), this captures TECHNICAL errors where:
-    - is_error == true
-    - NOT a user rejection (no "doesn't want to proceed")
-    - Optionally filtered for project-specific patterns only
+    Apply the existing technical error patterns to normalized Codex tool output.
 
     Args:
         session_file: Path to the session JSONL file
@@ -1025,78 +929,36 @@ def extract_tool_errors(
     if not session_file.exists():
         return []
 
-    errors = []
-
-    try:
-        with open(session_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                # Must be a user entry (tool results come back as user messages)
-                if entry.get("type") != "user":
-                    continue
-
-                # Get message.content array
-                content = entry.get("message", {}).get("content", [])
-                if not isinstance(content, list):
-                    continue
-
-                # Look for tool_result items with is_error
-                for item in content:
-                    if not isinstance(item, dict):
-                        continue
-
-                    if item.get("type") != "tool_result":
-                        continue
-
-                    if not item.get("is_error"):
-                        continue
-
-                    tool_content = item.get("content", "")
-                    if not isinstance(tool_content, str):
-                        continue
-
-                    # Skip if matches exclude patterns
-                    should_exclude = False
-                    for exclude_pattern in TOOL_ERROR_EXCLUDE_PATTERNS:
-                        if re.search(exclude_pattern, tool_content, re.IGNORECASE):
-                            should_exclude = True
-                            break
-
-                    if should_exclude:
-                        continue
-
-                    # If project_specific_only, check for matching patterns
-                    error_type = "unknown"
-                    suggested_guideline = None
-
-                    for etype, pattern, guideline in PROJECT_SPECIFIC_ERROR_PATTERNS:
-                        if re.search(pattern, tool_content, re.IGNORECASE):
-                            error_type = etype
-                            suggested_guideline = guideline
-                            break
-
-                    # Skip unknown errors if project_specific_only
-                    if project_specific_only and error_type == "unknown":
-                        continue
-
-                    errors.append({
-                        "error_type": error_type,
-                        "content": tool_content[:500],  # Truncate long errors
-                        "project": str(session_file.parent.name),
-                        "timestamp": entry.get("timestamp", ""),
-                        "suggested_guideline": suggested_guideline,
-                    })
-
-    except IOError:
+    result = parse_transcript(session_file)
+    if not result.supported:
         return []
+
+    errors = []
+    for tool_content in result.tool_outputs:
+        if any(
+            re.search(pattern, tool_content, re.IGNORECASE)
+            for pattern in TOOL_ERROR_EXCLUDE_PATTERNS
+        ):
+            continue
+
+        error_type = "unknown"
+        suggested_guideline = None
+        for etype, pattern, guideline in PROJECT_SPECIFIC_ERROR_PATTERNS:
+            if re.search(pattern, tool_content, re.IGNORECASE):
+                error_type = etype
+                suggested_guideline = guideline
+                break
+
+        if project_specific_only and error_type == "unknown":
+            continue
+
+        errors.append({
+            "error_type": error_type,
+            "content": tool_content[:500],
+            "project": result.cwd,
+            "timestamp": result.timestamp,
+            "suggested_guideline": suggested_guideline,
+        })
 
     return errors
 

@@ -56,12 +56,30 @@ class TestExtractToolErrors(unittest.TestCase):
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def _create_session_file(self, entries):
-        """Create a test session JSONL file."""
+    def _create_session_file(self, outputs, output_type="custom_tool_call_output"):
+        """Create a supported, sanitized Codex session JSONL file."""
         session_file = Path(self.temp_dir) / "test_session.jsonl"
-        with open(session_file, "w") as f:
-            for entry in entries:
-                f.write(json.dumps(entry) + "\n")
+        entries = [
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": "session-1",
+                    "cwd": "/repo",
+                    "timestamp": "2026-07-18T00:00:00Z",
+                },
+            },
+            *[
+                {
+                    "type": "response_item",
+                    "payload": {"type": output_type, "output": output},
+                }
+                for output in outputs
+            ],
+        ]
+        session_file.write_text(
+            "".join(json.dumps(entry) + "\n" for entry in entries),
+            encoding="utf-8",
+        )
         return session_file
 
     def test_extract_empty_file(self):
@@ -81,17 +99,9 @@ class TestExtractToolErrors(unittest.TestCase):
 
     def test_extract_connection_refused_error(self):
         """Test extraction of connection refused errors."""
-        entries = [{
-            "type": "user",
-            "message": {
-                "content": [{
-                    "type": "tool_result",
-                    "is_error": True,
-                    "content": "Connection refused to localhost:5432"
-                }]
-            }
-        }]
-        session_file = self._create_session_file(entries)
+        session_file = self._create_session_file([
+            "Connection refused to localhost:5432"
+        ])
 
         result = extract_tool_errors(session_file, project_specific_only=True)
 
@@ -100,69 +110,37 @@ class TestExtractToolErrors(unittest.TestCase):
         self.assertIn("Connection refused", result[0]["content"])
 
     def test_exclude_guardrails(self):
-        """Test that Claude Code guardrails are excluded."""
-        entries = [{
-            "type": "user",
-            "message": {
-                "content": [{
-                    "type": "tool_result",
-                    "is_error": True,
-                    "content": "File has not been read yet. Read it first before writing to it."
-                }]
-            }
-        }]
-        session_file = self._create_session_file(entries)
+        """Test that generic agent guardrails are excluded."""
+        session_file = self._create_session_file([
+            "File has not been read yet. Read it first before writing to it."
+        ])
 
         result = extract_tool_errors(session_file, project_specific_only=True)
         self.assertEqual(result, [])
 
     def test_exclude_user_rejections(self):
         """Test that user rejections are excluded (handled separately)."""
-        entries = [{
-            "type": "user",
-            "message": {
-                "content": [{
-                    "type": "tool_result",
-                    "is_error": True,
-                    "content": "The user doesn't want to proceed with this tool use."
-                }]
-            }
-        }]
-        session_file = self._create_session_file(entries)
+        session_file = self._create_session_file([
+            "The user doesn't want to proceed with this tool use."
+        ])
 
         result = extract_tool_errors(session_file, project_specific_only=True)
         self.assertEqual(result, [])
 
     def test_exclude_bash_quoting_errors(self):
-        """Test that bash quoting errors are excluded (global Claude behavior)."""
-        entries = [{
-            "type": "user",
-            "message": {
-                "content": [{
-                    "type": "tool_result",
-                    "is_error": True,
-                    "content": "unexpected EOF while looking for matching `'"
-                }]
-            }
-        }]
-        session_file = self._create_session_file(entries)
+        """Test that bash quoting errors are excluded as non-project-specific."""
+        session_file = self._create_session_file([
+            "unexpected EOF while looking for matching `'"
+        ])
 
         result = extract_tool_errors(session_file, project_specific_only=True)
         self.assertEqual(result, [])
 
     def test_extract_supabase_error(self):
         """Test extraction of Supabase-related errors."""
-        entries = [{
-            "type": "user",
-            "message": {
-                "content": [{
-                    "type": "tool_result",
-                    "is_error": True,
-                    "content": "Error: supabase connection failed - invalid URL"
-                }]
-            }
-        }]
-        session_file = self._create_session_file(entries)
+        session_file = self._create_session_file([
+            "Error: supabase connection failed - invalid URL"
+        ])
 
         result = extract_tool_errors(session_file, project_specific_only=True)
 
@@ -172,17 +150,9 @@ class TestExtractToolErrors(unittest.TestCase):
 
     def test_extract_module_not_found(self):
         """Test extraction of module not found errors."""
-        entries = [{
-            "type": "user",
-            "message": {
-                "content": [{
-                    "type": "tool_result",
-                    "is_error": True,
-                    "content": "ModuleNotFoundError: No module named 'myapp.utils'"
-                }]
-            }
-        }]
-        session_file = self._create_session_file(entries)
+        session_file = self._create_session_file([
+            "ModuleNotFoundError: No module named 'myapp.utils'"
+        ])
 
         result = extract_tool_errors(session_file, project_specific_only=True)
 
@@ -191,17 +161,9 @@ class TestExtractToolErrors(unittest.TestCase):
 
     def test_include_all_errors(self):
         """Test that project_specific_only=False includes unknown errors."""
-        entries = [{
-            "type": "user",
-            "message": {
-                "content": [{
-                    "type": "tool_result",
-                    "is_error": True,
-                    "content": "Some random unknown error happened"
-                }]
-            }
-        }]
-        session_file = self._create_session_file(entries)
+        session_file = self._create_session_file([
+            "Some random unknown error happened"
+        ])
 
         # With project_specific_only=True, should be empty
         result_filtered = extract_tool_errors(session_file, project_specific_only=True)
@@ -212,39 +174,34 @@ class TestExtractToolErrors(unittest.TestCase):
         self.assertEqual(len(result_all), 1)
         self.assertEqual(result_all[0]["error_type"], "unknown")
 
-    def test_skip_non_user_entries(self):
-        """Test that non-user entries are skipped."""
-        entries = [{
-            "type": "assistant",
-            "message": {
-                "content": [{
-                    "type": "tool_result",
-                    "is_error": True,
-                    "content": "Connection refused to localhost:5432"
-                }]
-            }
-        }]
-        session_file = self._create_session_file(entries)
+    def test_skip_function_call_output_shape(self):
+        """Only the confirmed custom tool output shape is consumed."""
+        session_file = self._create_session_file(
+            ["Connection refused to localhost:5432"],
+            output_type="function_call_output",
+        )
 
         result = extract_tool_errors(session_file)
         self.assertEqual(result, [])
 
-    def test_skip_non_error_results(self):
-        """Test that non-error tool results are skipped."""
-        entries = [{
-            "type": "user",
-            "message": {
-                "content": [{
-                    "type": "tool_result",
-                    "is_error": False,
-                    "content": "Command completed successfully"
-                }]
-            }
-        }]
-        session_file = self._create_session_file(entries)
+    def test_skip_successful_outputs_without_error_patterns(self):
+        session_file = self._create_session_file([
+            "Command completed successfully"
+        ])
 
         result = extract_tool_errors(session_file)
         self.assertEqual(result, [])
+
+    def test_redacts_secret_values_before_returning_error(self):
+        session_file = self._create_session_file([
+            "Connection refused; API_KEY=secret-value"
+        ])
+
+        result = extract_tool_errors(session_file)
+
+        self.assertEqual(len(result), 1)
+        self.assertNotIn("secret-value", result[0]["content"])
+        self.assertIn("API_KEY=[REDACTED]", result[0]["content"])
 
 
 class TestAggregateToolErrors(unittest.TestCase):
