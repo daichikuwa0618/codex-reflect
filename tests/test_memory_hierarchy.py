@@ -152,6 +152,7 @@ class TestReadOnlyPluginSkill(ResolverTestCase):
             / "review"
             / "SKILL.md"
         )
+        self.write(skill, "# Cached review")
 
         suggestion = self.resolver.suggest_target(
             "skill", cwd=self.nested, skill_path=skill
@@ -168,6 +169,7 @@ class TestReadOnlyPluginSkill(ResolverTestCase):
             / "skill-creator"
             / "SKILL.md"
         )
+        self.write(skill, "# System skill creator")
 
         suggestion = self.resolver.suggest_target(
             "skill", cwd=self.nested, skill_path=skill
@@ -184,12 +186,35 @@ class TestReadOnlyPluginSkill(ResolverTestCase):
             / "review"
             / "SKILL.md"
         )
+        self.write(skill, "# Managed review")
 
         suggestion = self.resolver.suggest_target(
             "skill", cwd=self.nested, skill_path=skill
         )
 
         self.assertEqual(suggestion.path, skill.resolve())
+        self.assertTrue(suggestion.read_only)
+
+    def test_repo_authoring_symlink_to_external_skill_is_suggested_read_only(self):
+        external = (
+            Path(self.temp_dir.name).resolve()
+            / "external"
+            / "review"
+            / "SKILL.md"
+        )
+        self.write(external, "# External review")
+        skill = self.repo / ".agents" / "skills" / "review" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        try:
+            skill.symlink_to(external)
+        except (NotImplementedError, OSError) as error:
+            self.skipTest("symlink unavailable: {}".format(error))
+
+        suggestion = self.resolver.suggest_target(
+            "skill", cwd=self.nested, skill_path=skill
+        )
+
+        self.assertEqual(suggestion.path, external.resolve())
         self.assertTrue(suggestion.read_only)
 
 

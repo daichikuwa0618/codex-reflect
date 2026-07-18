@@ -33,10 +33,13 @@ class TargetResolver:
         for name in ("AGENTS.override.md", "AGENTS.md"):
             candidate = directory / name
             try:
-                if candidate.is_file() and candidate.read_text(encoding="utf-8").strip():
-                    return candidate
-            except OSError:
+                mode = candidate.stat().st_mode
+            except FileNotFoundError:
                 continue
+            if not stat.S_ISREG(mode):
+                continue
+            if candidate.read_text(encoding="utf-8").strip():
+                return candidate
         return None
 
     def user_skill_root(self) -> Path:
@@ -49,17 +52,29 @@ class TargetResolver:
     @staticmethod
     def repository_root(cwd) -> Path:
         cwd = Path(cwd).expanduser().resolve()
+        child_env = {
+            name: value
+            for name, value in os.environ.items()
+            if not name.upper().startswith("GIT_")
+        }
         try:
             result = subprocess.run(
                 ["git", "-C", str(cwd), "rev-parse", "--show-toplevel"],
                 capture_output=True,
                 text=True,
                 check=False,
+                env=child_env,
             )
         except OSError:
             return cwd
-        if result.returncode == 0 and result.stdout.strip():
-            return Path(result.stdout.strip()).expanduser().resolve()
+        root_text = result.stdout.rstrip("\r\n")
+        if result.returncode == 0 and root_text:
+            raw_root = Path(root_text).expanduser()
+            if not raw_root.is_absolute():
+                return cwd
+            root = raw_root.resolve()
+            if root.is_dir() and (root == cwd or root in cwd.parents):
+                return root
         return cwd
 
     def instruction_targets(self, cwd) -> List[Path]:
@@ -112,8 +127,14 @@ class TargetResolver:
                 return active
         return cwd / "AGENTS.md"
 
+    @staticmethod
+    def _unique_source_projects(source_projects: Iterable[str]):
+        if isinstance(source_projects, (str, bytes)):
+            raise TypeError("source_projects must be an iterable of project names")
+        return set(source_projects)
+
     def suggest_skill_root(self, source_projects: Iterable[str], repo_root) -> Path:
-        if len(set(source_projects)) > 1:
+        if len(self._unique_source_projects(source_projects)) > 1:
             return self.user_skill_root()
         return self.repo_skill_root(repo_root)
 
@@ -174,8 +195,11 @@ class TargetResolver:
                 raise ValueError("skill_path is required for skill routing")
             return self.suggest_skill_target(skill_path, repo_root)
         if scope == "multi-project":
+            projects = self._unique_source_projects(source_projects)
+            if len(projects) < 2:
+                raise ValueError("multi-project routing requires two projects")
             return TargetSuggestion(
                 "skill-root",
-                self.suggest_skill_root(source_projects, repo_root),
+                self.suggest_skill_root(projects, repo_root),
             )
         raise ValueError("unknown target scope: {}".format(scope))
