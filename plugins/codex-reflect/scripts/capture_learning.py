@@ -28,7 +28,12 @@ def main() -> int:
     if not input_data:
         return 0
 
-    event = HookEvent.from_dict(json.loads(input_data))
+    data = json.loads(input_data)
+    cwd = data.get("cwd") if isinstance(data, dict) else None
+    if not isinstance(cwd, str) or not cwd or not os.path.isabs(cwd):
+        return 0
+
+    event = HookEvent.from_dict(data)
     prompt = event.prompt
     if not prompt:
         return 0

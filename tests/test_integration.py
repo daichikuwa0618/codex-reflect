@@ -154,6 +154,25 @@ class TestCaptureLearning(unittest.TestCase):
         self.assertEqual((stdout, stderr, code), ("", "", 0))
         self.assertFalse((self.codex_home / "codex-reflect").exists())
 
+    def assert_unscoped_cwd_is_skipped(self, cwd):
+        stdout, stderr, code = self.run_capture({
+            "hook_event_name": "UserPromptSubmit",
+            "cwd": cwd,
+            "prompt": "remember: do not capture without project scope",
+        })
+
+        self.assertEqual((stdout, stderr, code), ("", "", 0))
+        self.assertFalse((self.codex_home / "codex-reflect").exists())
+
+    def test_empty_cwd_is_skipped_without_state_write(self):
+        self.assert_unscoped_cwd_is_skipped("")
+
+    def test_relative_cwd_is_skipped_without_state_write(self):
+        self.assert_unscoped_cwd_is_skipped("relative/project")
+
+    def test_non_string_cwd_is_skipped_without_state_write(self):
+        self.assert_unscoped_cwd_is_skipped(["not", "a", "path"])
+
     def test_storage_failure_warns_and_does_not_block_turn(self):
         first_stdout, first_stderr, first_code = self.run_capture({
             "hook_event_name": "UserPromptSubmit",
