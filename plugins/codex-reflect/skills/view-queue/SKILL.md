@@ -1,6 +1,6 @@
 ---
 name: view-queue
-description: Use when pending Codex correction candidates need inspection before reflection.
+description: Use when codex-reflect learning candidates for the current project need read-only inspection.
 ---
 
-Report that this workflow is not available in this build. Do not run scripts or edit files.
+Resolve `../../scripts/read_queue.py` relative to this SKILL.md and run it with the current working directory unchanged. Return its formatted output verbatim. Do not modify queue or target files.

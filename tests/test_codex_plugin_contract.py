@@ -16,6 +16,13 @@ SKILL_BODY = (
     "Report that this workflow is not available in this build. "
     "Do not run scripts or edit files."
 )
+QUEUE_SKILL_SCRIPTS = {
+    "view-queue": ("../../scripts/read_queue.py",),
+    "skip-reflect": (
+        "../../scripts/read_queue.py",
+        "../../scripts/clear_queue.py",
+    ),
+}
 CAPTURE_COMMAND = 'python3 "${PLUGIN_ROOT}/scripts/capture_learning.py"'
 PRECOMPACT_COMMAND = 'python3 "${PLUGIN_ROOT}/scripts/check_learnings.py"'
 POST_TOOL_COMMAND = 'python3 "${PLUGIN_ROOT}/scripts/post_commit_reminder.py"'
@@ -41,7 +48,12 @@ class TestCodexPluginContract(unittest.TestCase):
             _, frontmatter, body = skill_text.split("---", maxsplit=2)
             self.assertIn(f"name: {skill_name}\n", frontmatter)
             self.assertRegex(frontmatter, r"(?m)^description: Use when .+$")
-            self.assertEqual(body.strip(), SKILL_BODY)
+            if skill_name in QUEUE_SKILL_SCRIPTS:
+                self.assertNotEqual(body.strip(), SKILL_BODY)
+                for script in QUEUE_SKILL_SCRIPTS[skill_name]:
+                    self.assertIn(script, body)
+            else:
+                self.assertEqual(body.strip(), SKILL_BODY)
 
     def test_repository_marketplace_contract(self):
         self.assertTrue(MARKETPLACE_PATH.is_file(), f"missing {MARKETPLACE_PATH}")
