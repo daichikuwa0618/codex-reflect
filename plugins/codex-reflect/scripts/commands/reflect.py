@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -13,6 +13,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from lib.codex_history import list_session_files, parse_transcript
+from lib.capabilities import Capabilities, probe_capabilities
 from lib.codex_paths import get_codex_home, get_project_id
 from lib.reflect_utils import detect_patterns, extract_tool_errors
 from lib.semantic_detector import detect_contradictions, semantic_analyze
@@ -26,6 +27,7 @@ class ReflectionContext:
     codex_home: Optional[Path] = None
     user_home: Optional[Path] = None
     session_files: Optional[List[Path]] = None
+    capabilities: Optional[Capabilities] = None
 
 
 def parse_args(argv=None):
@@ -48,9 +50,10 @@ def _state_store(context, project):
     return StateStore(state_dir)
 
 
-def _base_result(project):
+def _base_result(project, capabilities):
     return {
         "project": str(project),
+        "capabilities": asdict(capabilities),
         "candidates": [],
         "targets": [],
         "duplicates": [],
@@ -234,12 +237,16 @@ def _scan_history(
     return candidates
 
 
-def _semantic_candidates(items, model=None):
+def _semantic_candidates(items, model=None, semantic_available=True):
     candidates = []
     for original in items:
         item = dict(original) if isinstance(original, dict) else {}
         message = item.get("message", item.get("original_message", ""))
         if not isinstance(message, str) or not message:
+            continue
+        if not semantic_available:
+            item["semantic_status"] = "unavailable"
+            candidates.append(item)
             continue
         result = semantic_analyze(message, model=model)
         if result is None:
@@ -316,7 +323,8 @@ def prepare_reflection(
     codex_home = Path(context.codex_home or get_codex_home()).resolve()
     resolver = TargetResolver(codex_home, user_home=context.user_home)
     project = resolver.repository_root(context.project)
-    result = _base_result(project)
+    capabilities = context.capabilities or probe_capabilities(codex_home)
+    result = _base_result(project, capabilities)
 
     if targets:
         result["targets"] = _available_targets(resolver, project)
@@ -329,20 +337,32 @@ def prepare_reflection(
         if isinstance(item, dict) and (review or not _is_stale(item))
     ]
     if scan_history:
-        items.extend(_scan_history(
-            context,
-            resolver,
-            project,
-            result["history"],
-            days=days,
-            include_tool_errors=include_tool_errors,
-        ))
+        if capabilities.history_available or context.session_files is not None:
+            items.extend(_scan_history(
+                context,
+                resolver,
+                project,
+                result["history"],
+                days=days,
+                include_tool_errors=include_tool_errors,
+            ))
+        else:
+            result["history"]["issues"].extend(
+                warning
+                for warning in capabilities.warnings
+                if "history" in warning.lower()
+                or "sessions" in warning.lower()
+            )
 
-    candidates = _semantic_candidates(items, model=model)
+    candidates = _semantic_candidates(
+        items,
+        model=model,
+        semantic_available=capabilities.semantic_available,
+    )
     result["candidates"] = candidates
     if dedupe:
         result["duplicates"] = _duplicate_groups(candidates)
-    if organize:
+    if organize and capabilities.semantic_available:
         entries = [
             candidate.get("extracted_learning") or candidate.get("message", "")
             for candidate in candidates

@@ -14,6 +14,7 @@ SCRIPTS_DIR = REPO_ROOT / "plugins" / "codex-reflect" / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from commands.reflect import ReflectionContext, parse_args, prepare_reflection
+from lib.capabilities import Capabilities
 from lib.codex_paths import get_project_id
 
 
@@ -54,6 +55,13 @@ class TestReflectCommand(unittest.TestCase):
             project=self.project,
             codex_home=self.codex_home,
             session_files=[self.unknown],
+            capabilities=Capabilities(
+                codex_version="test",
+                history_available=True,
+                semantic_available=True,
+                realtime_queue_available=True,
+                warnings=[],
+            ),
         )
 
     def tearDown(self):
@@ -150,6 +158,7 @@ class TestReflectCommand(unittest.TestCase):
             project=self.project,
             codex_home=self.codex_home,
             session_files=[transcript],
+            capabilities=self.context.capabilities,
         )
 
         result = prepare_reflection(context, scan_history=True, days=1)
@@ -162,6 +171,66 @@ class TestReflectCommand(unittest.TestCase):
             "missing timestamp" in issue
             for issue in result["history"]["issues"]
         ))
+
+    @patch("commands.reflect.semantic_analyze")
+    @patch("commands.reflect.probe_capabilities")
+    def test_missing_codex_cli_keeps_candidates_without_semantic_calls(
+        self,
+        probe,
+        semantic,
+    ):
+        probe.return_value = Capabilities(
+            codex_version=None,
+            history_available=False,
+            semantic_available=False,
+            realtime_queue_available=True,
+            warnings=[
+                "Codex CLI is unavailable; semantic validation is unavailable"
+            ],
+        )
+
+        context = ReflectionContext(
+            project=self.project,
+            codex_home=self.codex_home,
+            session_files=[self.unknown],
+        )
+
+        with patch("commands.reflect.detect_contradictions") as contradictions:
+            result = prepare_reflection(context, organize=True)
+
+        semantic.assert_not_called()
+        contradictions.assert_not_called()
+        self.assertEqual(result["candidates"][0]["semantic_status"], "unavailable")
+        self.assertFalse(result["capabilities"]["semantic_available"])
+        self.assertTrue(result["capabilities"]["realtime_queue_available"])
+
+    @patch("commands.reflect._scan_history")
+    @patch("commands.reflect.probe_capabilities")
+    def test_unavailable_history_is_reported_without_fallback_scan(
+        self,
+        probe,
+        scan_history,
+    ):
+        probe.return_value = Capabilities(
+            codex_version="1.0.0",
+            history_available=False,
+            semantic_available=True,
+            realtime_queue_available=True,
+            warnings=["Codex history persistence is disabled"],
+        )
+        context = ReflectionContext(
+            project=self.project,
+            codex_home=self.codex_home,
+        )
+
+        result = prepare_reflection(context, scan_history=True)
+
+        scan_history.assert_not_called()
+        self.assertIn(
+            "Codex history persistence is disabled",
+            result["history"]["issues"],
+        )
+        self.assertFalse(result["capabilities"]["history_available"])
 
 
 if __name__ == "__main__":

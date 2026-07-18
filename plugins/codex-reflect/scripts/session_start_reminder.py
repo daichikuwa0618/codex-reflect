@@ -7,7 +7,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from lib.codex_hooks import HookEvent, system_message
-from lib.codex_paths import get_project_state_dir
+from lib.capabilities import probe_capabilities
+from lib.codex_paths import get_codex_home, get_project_state_dir
 from lib.state_store import StateStore
 
 
@@ -26,6 +27,28 @@ def _format_item(item, index):
     return f"{index}. {confidence_text}learning candidate"
 
 
+def _capability_lines(capabilities):
+    version = (
+        f" ({capabilities.codex_version})"
+        if capabilities.codex_version is not None
+        else ""
+    )
+    lines = [
+        "Codex capabilities: history={}, semantic={}{}; realtime queue={}.".format(
+            "available" if capabilities.history_available else "unavailable",
+            "available" if capabilities.semantic_available else "unavailable",
+            version,
+            (
+                "available"
+                if capabilities.realtime_queue_available
+                else "unavailable"
+            ),
+        )
+    ]
+    lines.extend("Capability: {}.".format(warning) for warning in capabilities.warnings)
+    return lines
+
+
 def main() -> int:
     input_data = sys.stdin.read()
     if not input_data:
@@ -38,18 +61,41 @@ def main() -> int:
         return 0
 
     event = HookEvent.from_dict(data)
+    capabilities = probe_capabilities(get_codex_home())
     store = StateStore(get_project_state_dir(event.cwd))
     initialized = store.queue_path.exists()
+    if not capabilities.realtime_queue_available:
+        lines = ["codex-reflect realtime queue is unavailable."]
+        lines.extend(_capability_lines(capabilities))
+        print(json.dumps(system_message("\n".join(lines))))
+        return 0
     items = store.load()
 
     if not initialized:
-        print(json.dumps(system_message(
-            "codex-reflect is not initialized for this project. "
-            "Run $codex-reflect:reflect --scan-history to review available "
-            "Codex session history."
-        )))
+        lines = ["codex-reflect has no project queue yet."]
+        lines.extend(_capability_lines(capabilities))
+        if capabilities.realtime_queue_available:
+            lines.append(
+                "Realtime capture may not have run; review and trust the "
+                "codex-reflect definitions with /hooks."
+            )
+        if capabilities.history_available:
+            lines.append(
+                "Run $codex-reflect:reflect --scan-history to review available "
+                "Codex session history."
+            )
+        elif capabilities.realtime_queue_available:
+            lines.append(
+                "Saved history is unavailable, but the realtime queue remains "
+                "available after Hook trust."
+            )
+        print(json.dumps(system_message("\n".join(lines))))
         return 0
     if not items:
+        if capabilities.warnings:
+            lines = ["codex-reflect queue is empty."]
+            lines.extend(_capability_lines(capabilities))
+            print(json.dumps(system_message("\n".join(lines))))
         return 0
 
     lines = [f"codex-reflect has {len(items)} pending learning(s):"]
@@ -60,6 +106,7 @@ def main() -> int:
     if len(items) > 5:
         lines.append(f"... and {len(items) - 5} more")
     lines.append("Run $codex-reflect:reflect to review them.")
+    lines.extend(_capability_lines(capabilities))
     print(json.dumps(system_message("\n".join(lines))))
     return 0
 

@@ -257,7 +257,7 @@ class CodexLifecycleHookTestCase(unittest.TestCase):
 
 
 class TestSessionStartReminder(CodexLifecycleHookTestCase):
-    def test_session_start_returns_codex_system_message_when_uninitialized(self):
+    def test_uninitialized_queue_reports_hooks_and_missing_history(self):
         payload = {
             "hook_event_name": "SessionStart",
             "cwd": str(self.project),
@@ -274,8 +274,28 @@ class TestSessionStartReminder(CodexLifecycleHookTestCase):
         response = json.loads(stdout)
         self.assertIn("systemMessage", response)
         self.assertIs(response["continue"], True)
-        self.assertIn("reflect --scan-history", response["systemMessage"])
+        self.assertIn("/hooks", response["systemMessage"])
+        self.assertIn("No saved Codex sessions found", response["systemMessage"])
+        self.assertIn("realtime queue", response["systemMessage"])
+        self.assertNotIn("reflect --scan-history", response["systemMessage"])
         self.assertFalse((self.codex_home / "codex-reflect").exists())
+
+    def test_uninitialized_queue_offers_history_scan_when_sessions_exist(self):
+        session = self.codex_home / "sessions" / "saved.jsonl"
+        session.parent.mkdir(parents=True)
+        session.write_text("{}\n", encoding="utf-8")
+
+        stdout, stderr, code = self.run_hook("session_start_reminder", {
+            "hook_event_name": "SessionStart",
+            "cwd": str(self.project),
+        })
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn(
+            "reflect --scan-history",
+            json.loads(stdout)["systemMessage"],
+        )
 
     def test_session_start_shows_at_most_five_items_from_event_project(self):
         self.write_queue([
@@ -318,15 +338,20 @@ class TestSessionStartReminder(CodexLifecycleHookTestCase):
         self.assertIn("6 pending learning", message)
         self.assertIn("1 more", message)
 
-    def test_initialized_empty_queue_has_no_output(self):
+    def test_initialized_empty_queue_reports_capability_gap(self):
         self.write_queue([])
 
-        result = self.run_hook("session_start_reminder", {
+        stdout, stderr, code = self.run_hook("session_start_reminder", {
             "hook_event_name": "SessionStart",
             "cwd": str(self.project),
         })
 
-        self.assertEqual(result, ("", "", 0))
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+        message = json.loads(stdout)["systemMessage"]
+        self.assertIn("queue is empty", message)
+        self.assertIn("No saved Codex sessions found", message)
+        self.assertNotIn("overall failure", message)
 
     def test_invalid_cwd_is_skipped_without_state_write(self):
         self.assert_invalid_cwd_is_skipped("session_start_reminder")
