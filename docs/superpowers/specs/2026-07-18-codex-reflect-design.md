@@ -1,69 +1,69 @@
-# codex-reflect Codex 専用化 要件・設計
+# codex-reflect Codex-Only Requirements and Design
 
-- Status: ユーザー承認済み
+- Status: Approved by the user
 - Date: 2026-07-18
 - Base: `BayramAnnakov/claude-reflect` `main` (`8dc9db43c9bfaa53b567d63f3f48385bcf3d3084`)
 - License: MIT
 
-## 1. 背景
+## 1. Background
 
-`claude-reflect` は、ユーザーからの訂正・肯定・明示的な記憶指示を自動捕捉し、人間のレビューを経て永続的なガイダンスへ反映する。また、過去セッションから反復ワークフローを発見して再利用可能な Skill を生成する。
+`claude-reflect` automatically captures corrections, positive feedback, and explicit memory instructions, then promotes them to persistent guidance after human review. It also discovers repeated workflows in past sessions and generates reusable Skills.
 
-本プロジェクトは、この成果を維持しながら Claude Code 固有の Plugin、Hooks、履歴、command、memory hierarchy を Codex の公式 surface に置き換える。Claude Code との runtime 互換や既存データ移行は行わず、Codex 専用 OSS Plugin とする。
+This project preserves those outcomes while replacing Claude Code-specific Plugins, Hooks, history, commands, and memory hierarchy with official Codex surfaces. It is a Codex-only open-source Plugin; runtime compatibility with Claude Code and migration of legacy data are out of scope.
 
-## 2. 設計原則
+## 2. Design principles
 
-1. fork 元と同じユーザー成果を、Codex-native な操作で提供する。
-2. fork 元の実績ある detection、confidence、decay、dedup、human review、テスト資産を再利用する。
-3. Claude／Codex 固有部分を adapter に隔離する。
-4. 自動捕捉と永続ガイダンスへの昇格を分離する。
-5. `AGENTS.md` または Skills を変更する前に、変更案と最終確認を提示する。
-6. Codex に自然な対応機能がない場合は、制約と利用可能な代替を明記する。大規模で壊れやすい workaround は作らない。
-7. Codex の内部 DB、非公開 schema、生成管理される Memories を書き換えない。
-8. transcript、Hook、semantic analysis の失敗で queue の候補を失わない。
+1. Produce the same user outcomes as the upstream project through Codex-native operations.
+2. Reuse proven upstream detection, confidence, decay, deduplication, human review, and test assets.
+3. Isolate Claude-specific and Codex-specific behavior behind adapters.
+4. Keep automatic capture separate from promotion to persistent guidance.
+5. Present the proposal and obtain final confirmation before changing `AGENTS.md` or Skills.
+6. When Codex has no natural equivalent, document the limitation and available alternative instead of building a large, fragile workaround.
+7. Do not modify Codex internal databases, private schemas, or generated Codex Memories.
+8. Never lose queued candidates because transcript parsing, Hooks, or semantic analysis failed.
 
-## 3. 目的
+## 3. Goal
 
-`codex-reflect` を導入した利用者が、次の feedback loop を Codex CLI、ChatGPT desktop app のローカル Codex、Codex IDE extension で利用できることを目的とする。
+Users who install `codex-reflect` should be able to use this feedback loop from the Codex CLI, local Codex in the ChatGPT desktop app, and the Codex IDE extension:
 
 ```text
-ユーザーの feedback
-  -> 自動捕捉
+user feedback
+  -> automatic capture
   -> project queue
-  -> 意味解析と scope 判定
-  -> 人間によるレビュー・編集
-  -> 最終確認
-  -> AGENTS.md または Skill
+  -> semantic analysis and scope classification
+  -> human review and editing
+  -> final confirmation
+  -> AGENTS.md or Skill
 ```
 
-## 4. 対象と非対象
+## 4. Scope
 
-### 4.1 対象
+### 4.1 In scope
 
 - Codex CLI
-- ChatGPT desktop app 上のローカル Codex
+- Local Codex in the ChatGPT desktop app
 - Codex IDE extension
-- 同一 Codex host の `CODEX_HOME`、Plugins、Hooks、Skills、session transcripts
-- macOS、Linux、Windows
-- 個人および repository 単位のガイダンス
-- 一般公開する MIT License の OSS Plugin
+- `CODEX_HOME`, Plugins, Hooks, Skills, and session transcripts on the same Codex host
+- macOS, Linux, and Windows
+- User-level and repository-level guidance
+- A publicly distributed MIT-licensed open-source Plugin
 
-### 4.2 非対象
+### 4.2 Out of scope
 
-- Codex cloud task
+- Codex cloud tasks
 - ChatGPT web Work mode
-- Claude Code runtime との併用モード
-- `~/.claude` からの既存 queue、memory、command の移行
-- `~/.codex/memories` の直接編集
-- Codex 内部 SQLite DB の直接参照・変更
-- transcript format を安定 API に見せかける互換 daemon
-- Hook trust や sandbox を自動回避する仕組み
+- A dual-runtime mode with Claude Code
+- Migration of existing queues, memories, or commands from `~/.claude`
+- Direct edits to `~/.codex/memories`
+- Direct access to or modification of Codex internal SQLite databases
+- A compatibility daemon that presents transcript formats as stable APIs
+- Automatic bypasses for Hook trust or sandbox controls
 
-## 5. 操作体系
+## 5. User operations
 
-Skill 名は fork 元に準拠する。
+Skill names follow the upstream project.
 
-| fork 元 | Codex Plugin |
+| Upstream | Codex Plugin |
 |---|---|
 | `/reflect` | `$codex-reflect:reflect` |
 | `/reflect-skills` | `$codex-reflect:reflect-skills` |
@@ -72,139 +72,139 @@ Skill 名は fork 元に準拠する。
 
 ### 5.1 `reflect`
 
-次の引数と成果を維持する。
+Preserve these arguments and outcomes:
 
-- `--dry-run`: queue、`AGENTS.md`、Skills を変更せず、ユーザーへの確認も行わずに変更案を表示する。
-- `--scan-history`: 保存済み session から候補を抽出する。
-- `--days N`: 履歴対象を直近 N 日へ制限する。
-- `--targets`: 現在適用可能な `AGENTS.md` と Skills の候補を表示する。
-- `--review`: stale／decayed を含めて queue を表示する。
-- `--dedupe`: 類似するガイダンスを提示し、統合案を作る。
-- `--organize`: `AGENTS.md` hierarchy、Skills、queue 間の整理案を提示する。
-- `--include-tool-errors`: project 固有の tool error を候補へ含める。`--scan-history` では有効とする。
-- `--model MODEL`: semantic analysis 用 Codex model を上書きする。
+- `--dry-run`: show the proposal without changing the queue, `AGENTS.md`, or Skills and without asking selection questions.
+- `--scan-history`: extract candidates from saved sessions.
+- `--days N`: restrict history to the latest N days.
+- `--targets`: show eligible `AGENTS.md` and Skill targets.
+- `--review`: include stale or decayed queue items.
+- `--dedupe`: present similar guidance and propose consolidation.
+- `--organize`: propose organization across the `AGENTS.md` hierarchy, Skills, and queue.
+- `--include-tool-errors`: include project-specific tool errors. This applies to history scans.
+- `--model MODEL`: override the Codex model used for semantic analysis.
 
-初回の `reflect` は全履歴スキャンを提案する。自動開始せず、対象となる active／archived session の件数と、semantic analysis へ送られる情報を説明して承認を得る。利用者は `--days N` で範囲を制限できる。
+The first `reflect` run proposes a history scan but never starts it automatically. It reports the number of active and archived sessions in scope and explains what semantic analysis sends to the provider before asking for approval. Users can restrict the range with `--days N`.
 
 ### 5.2 `reflect-skills`
 
-- `--days N`: 直近 N 日を解析する。既定は fork 元と同じ 14 日。
-- `--project <path>`: 指定 project の session を解析する。
-- `--all-projects`: 複数 project を横断する。
-- `--dry-run`: Skill を生成せず候補だけを表示する。
+- `--days N`: analyze the latest N days; the upstream-compatible default is 14.
+- `--project <path>`: analyze sessions for one project.
+- `--all-projects`: analyze sessions across projects.
+- `--dry-run`: show candidates without generating Skills.
 
-既定では current project のみを対象とする。候補名、説明、根拠となる反復回数、想定配置先を提示し、利用者が承認した Skill だけを生成する。
+The default scope is the current project. Show the candidate name, description, repetition evidence, and proposed destination, then generate only Skills approved by the user.
 
 ### 5.3 `view-queue`
 
-current project の queue を confidence、pattern、相対時刻、source とともに表示する。書き込みは行わない。
+Display the current-project queue with confidence, pattern, relative time, and source. Do not write anything.
 
 ### 5.4 `skip-reflect`
 
-破棄対象を一覧表示し、確認後に current project の queue を空にする。backup と既に適用済みの `AGENTS.md`／Skills は変更しない。
+List the items that will be discarded, ask for confirmation, and then clear only the current-project queue. Do not modify backups or already-applied `AGENTS.md` files and Skills.
 
-## 6. 機能要件
+## 6. Functional requirements
 
-### FR-01: リアルタイム捕捉
+### FR-01: Real-time capture
 
-`UserPromptSubmit` Hook で次を検出する。
+The `UserPromptSubmit` Hook detects:
 
-- correction
+- corrections
 - positive feedback
-- 明示的な記憶指示
-- CJK を含む複数言語の既存 pattern
+- explicit memory instructions
+- existing multilingual patterns, including CJK
 
-Hook は高速な heuristic 判定だけを行い、model を起動しない。system content、tool result、session continuation、極端に長い prompt など、fork 元で除外している入力を引き続き除外する。
+The Hook performs only fast heuristic detection and never starts a model. Continue excluding system content, tool results, session continuations, extremely long prompts, and the other inputs filtered by the upstream project.
 
-### FR-02: project-scoped queue
+### FR-02: Project-scoped queue
 
-候補は current repository root を基準に project ごとに分離する。repository 外では正規化した current working directory を project identity とする。
+Isolate candidates by project using the current repository root. Outside a repository, use the normalized current working directory as the project identity.
 
-### FR-03: lifecycle 通知
+### FR-03: Lifecycle notifications
 
-- `SessionStart`: 未処理件数と初回履歴スキャンを案内する。
-- `PreCompact`: queue の backup を作成する。
-- `PostToolUse`: `git commit` を観測できた場合、未処理候補を案内する。
+- `SessionStart`: report pending items and suggest the first history scan.
+- `PreCompact`: create a queue backup.
+- `PostToolUse`: when a `git commit` is observable, remind the user about pending candidates.
 
-Hook trust、project trust、event coverage の不足で発火しない場合は、診断手順を提示する。
+If Hook trust, project trust, or incomplete event coverage prevents a Hook from firing, provide diagnostics.
 
-### FR-04: semantic validation
+### FR-04: Semantic validation
 
-fork 元の `claude -p` subprocess に相当する処理として `codex exec` を使用する。
+Use `codex exec` as the Codex equivalent of the upstream semantic subprocess:
 
-- ephemeral session とする。
-- reflect 自身の Hooks を無効にし、再帰を防ぐ。
-- read-only sandbox とする。
-- final response を JSON Schema で制約する。
-- model override を許可する。
-- timeout、認証失敗、schema error では heuristic 結果へ fallback する。
-- 明示的な記憶指示を semantic 判定だけで破棄しない。
+- use an ephemeral session;
+- disable reflect Hooks to prevent recursion;
+- use a read-only sandbox;
+- constrain the final response with JSON Schema;
+- permit a model override;
+- fall back to heuristic results on timeout, authentication failure, or schema errors; and
+- never discard an explicit memory instruction solely because of semantic classification.
 
-### FR-05: human review
+### FR-05: Human review
 
-学習候補ごとに次を表示する。
+For every learning candidate, show:
 
-- original message
-- 整形後の actionable learning
-- source
-- confidence
-- suggested target
-- duplicate／contradiction
-- stale／decay 状態
+- the original message
+- the normalized actionable learning
+- the source
+- the confidence score
+- the suggested target
+- duplicate or contradiction findings
+- stale or decay status
 
-利用者は apply all、選択適用、詳細レビュー、skip を選べる。Skill 関連候補は既存 Skill、`AGENTS.md`、両方、skip から routing を選べる。
+Allow the user to apply all, select items, review details, or skip. For Skill-related candidates, let the user route to an existing Skill, `AGENTS.md`, both, or skip.
 
-### FR-06: 最終確認
+### FR-06: Final confirmation
 
-`AGENTS.md` または Skills を変更する直前に、対象ファイルと追加・更新・置換内容を表示する。利用者が最終確認した変更だけを適用する。
+Immediately before changing `AGENTS.md` or a Skill, show the target file and the exact addition, update, or replacement. Apply only changes covered by final confirmation.
 
-queue、backup、schema migration、初期化情報など Plugin 内部状態の自動保存には、この最終確認を要求しない。
+This final confirmation is not required for internal Plugin state such as queue updates, backups, schema migrations, or initialization metadata.
 
-### FR-07: target routing
+### FR-07: Target routing
 
-Codex が実際に読む instruction chain を対象とする。
+Target the instruction chain Codex actually reads:
 
-- Global: `$CODEX_HOME/AGENTS.override.md` が存在すればそれを active file とし、なければ `$CODEX_HOME/AGENTS.md`
-- Repository: repository root から current working directory までの applicable な `AGENTS.override.md` または `AGENTS.md`
-- Nested: path-specific な学習に最も近い applicable directory の active file
-- Existing Skill: correction が特定 Skill の実行に関連する場合
-- New Skill: 複数 session にまたがる反復 workflow の場合
+- Global: use `$CODEX_HOME/AGENTS.override.md` when it exists; otherwise use `$CODEX_HOME/AGENTS.md`.
+- Repository: resolve the applicable `AGENTS.override.md` or `AGENTS.md` files from the repository root to the current working directory.
+- Nested: route path-specific learning to the nearest applicable directory.
+- Existing Skill: use it when the correction concerns execution of that Skill.
+- New Skill: use it for a repeated workflow observed across multiple sessions.
 
-`AGENTS.override.md` を自動新規作成して既存 `AGENTS.md` を mask しない。存在しない instruction file を新規作成する場合は、target と filename を最終確認に含める。
+Do not create an `AGENTS.override.md` automatically and mask an existing `AGENTS.md`. When proposing a new instruction file, include the target and filename in final confirmation.
 
-### FR-08: duplicate／contradiction
+### FR-08: Duplicates and contradictions
 
-applicable な `AGENTS.md` chain と対象 Skills を検索し、同義・重複・矛盾の候補を提示する。自動削除や自動上書きは行わない。
+Search the applicable `AGENTS.md` chain and target Skills for semantically equivalent, duplicate, or contradictory guidance. Present findings without automatic deletion or overwrite.
 
-### FR-09: tool error／rejection
+### FR-09: Tool errors and rejections
 
-安定した Hook payload または対応済み transcript schema から取得できる範囲で、tool error と利用者による rejection を候補化する。利用者へ raw candidate を示し、model が再利用不可と判断しただけで不可視にしない。
+Create candidates from tool errors and user rejections only when they can be read from stable Hook payloads or supported transcript schemas. Show the raw candidate; do not hide it merely because a model classified it as non-reusable.
 
-### FR-10: Skill 発見・改善
+### FR-10: Skill discovery and improvement
 
-複数 session の intent と workflow を semantic analysis で比較し、反復 pattern を提案する。既存 Skill と同義の場合は新規作成せず、改善候補として提示する。
+Use semantic analysis to compare intent and workflow across sessions and propose repeated patterns. When a pattern is semantically equivalent to an existing Skill, propose an improvement rather than a new Skill.
 
-生成先は repository scope の `$REPO_ROOT/.agents/skills/<name>/SKILL.md` または user scope の `$HOME/.agents/skills/<name>/SKILL.md` とする。根拠が単一 project に閉じていれば repository scope、複数 project に共通すれば user scope を提案し、利用者が配置先を確定する。
+Generate repository-scoped Skills under `$REPO_ROOT/.agents/skills/<name>/SKILL.md` and user-scoped Skills under `$HOME/.agents/skills/<name>/SKILL.md`. Recommend repository scope when all evidence belongs to one project and user scope when evidence spans projects; the user confirms the destination.
 
-既存 Skill の authoring source が書き込み可能な user／repository Skill なら改善 diff を提示できる。Plugin cache、system Skill、admin-managed Skill など、書き換えるべきでない配布物の場合は直接編集せず、改善案だけを表示する。
+When the authoring source is a writable user or repository Skill, present an improvement diff. For Plugin cache, system, admin-managed, or other distributed Skills that should not be modified, show only a read-only proposal.
 
-## 7. Codex 固有の対応関係
+## 7. Codex mappings
 
-| Claude Code 側 | Codex 側 | 方針 |
+| Claude Code surface | Codex surface | Policy |
 |---|---|---|
-| `.claude-plugin/plugin.json` | `.codex-plugin/plugin.json` | Codex manifest へ置換 |
-| Claude command | Plugin-bundled Skill | fork 元の名前を維持 |
-| `CLAUDE.md` | `AGENTS.md`／`AGENTS.override.md` | active instruction chain に routing |
-| `.claude/rules/*.md` | nested `AGENTS.md` または既存 Skill | Codex の自然な scope へ変換 |
-| `CLAUDE.local.md` | 既存の applicable `AGENTS.override.md` | override を勝手に新規作成しない |
-| Claude auto memory | 対応なし | Codex Memories を直接編集しない |
-| `claude -p` | `codex exec` | ephemeral、Hooks off、read-only |
-| `~/.claude/projects` | `$CODEX_HOME/codex-reflect` | Hook と Skill が共有できる安定 path |
-| Claude session JSONL | Codex history adapter | 既知 schema のみ best-effort 対応 |
+| `.claude-plugin/plugin.json` | `.codex-plugin/plugin.json` | Replace with a Codex manifest |
+| Claude command | Plugin-bundled Skill | Preserve upstream names |
+| `CLAUDE.md` | `AGENTS.md` or `AGENTS.override.md` | Route into the active instruction chain |
+| `.claude/rules/*.md` | nested `AGENTS.md` or an existing Skill | Map to natural Codex scope |
+| `CLAUDE.local.md` | an existing applicable `AGENTS.override.md` | Never create an override silently |
+| Claude auto memory | no equivalent target | Do not edit Codex Memories |
+| `claude -p` | `codex exec` | Ephemeral, Hooks disabled, read-only |
+| `~/.claude/projects` | `$CODEX_HOME/codex-reflect` | Stable shared path for Hooks and Skills |
+| Claude session JSONL | Codex history adapter | Best-effort support for known schemas only |
 
-low-confidence learning は Codex Memories へ書かず、review 済みになるまで queue に残す。`--organize` は `AGENTS.md`、Skills、queue の間だけで整理案を作る。
+Keep low-confidence learning in the queue until review instead of writing it to Codex Memories. `--organize` works only across `AGENTS.md`, Skills, and the queue.
 
-## 8. アーキテクチャ
+## 8. Architecture
 
 ```text
 Codex Hooks / Plugin Skills
@@ -219,7 +219,7 @@ Platform-independent core
 Codex adapters / state / targets
 ```
 
-### 8.1 想定 Plugin 構成
+### 8.1 Plugin layout
 
 ```text
 .codex-plugin/
@@ -240,45 +240,45 @@ schemas/
 tests/
 ```
 
-構成名は実装計画で file 単位に確定するが、Hook、workflow、core、adapter の責務境界は維持する。
+The implementation plan determines exact file names, but it must preserve boundaries among Hooks, workflows, core logic, and adapters.
 
-### 8.2 Integration 層
+### 8.2 Integration layer
 
-Codex manifest、Hooks、Skills を所有する。Hooks は捕捉、backup、通知だけを担当する。Skills はユーザー対話と workflow の進行を担当する。
+Own the Codex manifest, Hooks, and Skills. Hooks handle capture, backup, and notifications. Skills own user interaction and workflow progression.
 
-### 8.3 Workflow 層
+### 8.3 Workflow layer
 
-`reflect`、`reflect-skills`、`view-queue`、`skip-reflect` の処理順序を所有する。JSONL 解析、path 解決、queue 更新などの決定的処理は scripts へ委譲し、`SKILL.md` を巨大な shell snippet 集にしない。
+Own the execution order of `reflect`, `reflect-skills`, `view-queue`, and `skip-reflect`. Delegate deterministic JSONL parsing, path resolution, and queue updates to scripts instead of turning `SKILL.md` into a collection of large shell snippets.
 
-### 8.4 Core 層
+### 8.4 Core layer
 
-次の platform-independent logic を所有する。
+Own platform-independent logic:
 
 - pattern detection
-- confidence／decay
-- candidate／learning model
+- confidence and decay
+- candidate and learning models
 - semantic response validation
-- duplicate／contradiction model
+- duplicate and contradiction models
 - tool error aggregation
-- target suggestion
+- target suggestions
 - secret redaction
 
-Core 層は `.claude`、`.codex`、Claude session、Codex transcript の path や schema を知らない。
+The core layer must not know `.claude` or `.codex` paths or Claude/Codex transcript schemas.
 
-### 8.5 Adapter 層
+### 8.5 Adapter layer
 
-- `HookInputAdapter`: Codex Hook JSON を normalized event へ変換する。
-- `HistoryAdapter`: active／archived transcript の既知 schema を normalized event へ変換する。
-- `SemanticAdapter`: 安全な設定で `codex exec` を実行する。
-- `StateStore`: `$CODEX_HOME/codex-reflect` の queue、backup、state を扱う。
-- `TargetResolver`: applicable な `AGENTS.md` と Skills を解決する。
-- `CapabilityProbe`: Codex version、Hooks、履歴、権限、Skill discovery を診断する。
+- `HookInputAdapter`: normalize Codex Hook JSON.
+- `HistoryAdapter`: normalize supported active and archived transcript schemas.
+- `SemanticAdapter`: execute `codex exec` with safe settings.
+- `StateStore`: manage queues, backups, and state under `$CODEX_HOME/codex-reflect`.
+- `TargetResolver`: resolve applicable `AGENTS.md` files and Skills.
+- `CapabilityProbe`: diagnose Codex version, Hooks, history, permissions, and Skill discovery.
 
-## 9. 状態管理
+## 9. State management
 
-### 9.1 保存場所
+### 9.1 Storage location
 
-共有状態は `$CODEX_HOME/codex-reflect` に置く。`CODEX_HOME` が未設定の場合は `~/.codex/codex-reflect` とする。
+Store shared state under `$CODEX_HOME/codex-reflect`, or under `~/.codex/codex-reflect` when `CODEX_HOME` is unset.
 
 ```text
 $CODEX_HOME/codex-reflect/
@@ -289,11 +289,11 @@ $CODEX_HOME/codex-reflect/
       backups/
 ```
 
-`$PLUGIN_DATA` は Plugin Hook 固有の一時データに限り、Hook と Skill の共有 SSOT にはしない。公式に `$PLUGIN_DATA` が Plugin Skill の通常 shell command へ渡される保証がないためである。
+Limit `$PLUGIN_DATA` to Hook-specific temporary data. It is not the shared source of truth because Codex does not guarantee that ordinary shell commands run by Plugin Skills receive `$PLUGIN_DATA`.
 
 ### 9.2 Queue item
 
-queue item は最低限、次の情報を持つ。
+Each queue item contains at least:
 
 ```text
 schema_version
@@ -314,20 +314,20 @@ source
 
 ### 9.3 Project identity
 
-Git repository 内では正規化した repository root、repository 外では正規化した working directory を使用する。Windows の drive letter と case、separator、symlink を正規化し、安定した project ID を生成する。
+Inside Git, use the normalized repository root. Outside Git, use the normalized working directory. Normalize Windows drive-letter case, separators, and symlinks to derive a stable project ID.
 
-### 9.4 書き込み整合性
+### 9.4 Write integrity
 
-- queue 更新は file lock と atomic replace を使用する。
-- backup は queue の現行 schema version を保持する。
-- JSON が破損している場合は上書きせず、診断と recovery candidate を表示する。
-- 永続 target の適用直前に対象を再読込する。
-- review 開始後に target が変化していた場合は書き込まず、diff を再生成する。
-- partial apply が発生した場合、未適用候補は queue に残す。
+- Use a file lock and atomic replacement for queue updates.
+- Preserve the current queue schema version in backups.
+- Do not overwrite malformed JSON; report diagnostics and recovery options.
+- Re-read a persistent target immediately before applying a change.
+- If a target changed after review started, stop and regenerate the diff.
+- If an apply is partial, keep unapplied candidates in the queue.
 
-## 10. データフロー
+## 10. Data flow
 
-### 10.1 リアルタイム捕捉
+### 10.1 Real-time capture
 
 ```text
 UserPromptSubmit
@@ -335,10 +335,10 @@ UserPromptSubmit
   -> system/tool content filtering
   -> heuristic detection
   -> project queue
-  -> short notification when captured
+  -> short capture notification
 ```
 
-### 10.2 Reflect
+### 10.2 Reflection
 
 ```text
 queue load
@@ -348,168 +348,168 @@ queue load
   -> duplicate/contradiction/scope analysis
   -> proposal
   -> user selection
-  -> final diff
+  -> exact diff
   -> final confirmation
   -> AGENTS.md / Skill apply
   -> queue update
 ```
 
-### 10.3 Skill 発見
+### 10.3 Skill discovery
 
 ```text
 normalized session events
   -> repeated intent/workflow analysis
-  -> existing Skill comparison
+  -> comparison with existing Skills
   -> candidate list with evidence
-  -> user selection and placement confirmation
+  -> user selection and destination confirmation
   -> Skill generation
   -> structure validation
 ```
 
-## 11. 履歴互換
+## 11. History compatibility
 
-### 11.1 読み取り対象
+### 11.1 Read locations
 
 - `$CODEX_HOME/sessions`
 - `$CODEX_HOME/archived_sessions`
-- Hook payload の `transcript_path`
+- `transcript_path` from a Hook payload
 
 ### 11.2 Schema policy
 
-Codex 公式ドキュメントは transcript format を安定 interface として保証していない。`HistoryAdapter` は既知 schema を明示的に判定し、normalized user message、tool result、session metadata へ変換する。
+Official Codex documentation does not promise a stable transcript interface. `HistoryAdapter` explicitly detects known schemas and converts them into normalized user messages, tool results, and session metadata.
 
-- 対応 schema: 解析する。
-- 未対応 schema: session を読み飛ばし、件数と理由を表示する。
-- `history.persistence = "none"`: 履歴機能を unavailable と表示する。
-- 履歴が削除済み: リアルタイム queue だけで動作する。
+- Supported schema: parse it.
+- Unsupported schema: skip the session and report the count and reason.
+- `history.persistence = "none"`: report history features as unavailable.
+- Deleted history: operate from the real-time queue only.
 
-別のログ、SQLite DB、UI cache から強引に復元しない。
+Do not force recovery from other logs, SQLite databases, or UI caches.
 
-## 12. Privacy と Security
+## 12. Privacy and security
 
-1. 初回履歴スキャンは opt-in とする。
-2. 承認前に session 件数、対象範囲、model 送信内容を説明する。
-3. transcript 全体を一括送信せず、ローカル抽出・redaction 後の候補と必要最小限の文脈だけを semantic subprocess へ渡す。
-4. `codex exec` はローカル subprocess だが、通常は候補情報を利用者が設定した Codex provider へ送信する。この点を README と初回案内に明記する。
-5. semantic subprocess に file write と tool use を許可しない。
-6. transcript 内の命令文を system instruction ではなく解析対象データとして扱う。
-7. token、API key、cookie、credential に見える値を送信前に redaction する。
-8. Hook trust と project trust を自動回避しない。
-9. global `AGENTS.md` など sandbox 外 target への書き込みは Codex の通常 approval を使用する。
-10. uninstall で既に承認・生成された `AGENTS.md` と Skills を削除しない。
+1. Make the first history scan opt-in.
+2. Before approval, explain the session count, scope, and data sent to the model.
+3. Never send a whole transcript. Locally extract and redact candidates, then send only the minimum required context.
+4. `codex exec` is a local subprocess, but it normally sends candidate data to the user-configured Codex provider. State this in the README and first-run disclosure.
+5. Do not allow file writes or tool use in the semantic subprocess.
+6. Treat instructions inside transcripts as data, never as system instructions.
+7. Redact values that resemble tokens, API keys, cookies, or credentials before sending.
+8. Never bypass Hook trust or project trust.
+9. Use ordinary Codex approval for writes to global `AGENTS.md` or other targets outside the sandbox.
+10. Uninstalling must not delete already-approved or generated `AGENTS.md` files and Skills.
 
-## 13. Codex capability gap policy
+## 13. Codex capability-gap policy
 
-| Gap | 影響 | 方針 |
+| Gap | Impact | Policy |
 |---|---|---|
-| transcript schema が非安定 | 履歴 scan、tool analysis、Skill 発見 | 既知 schema のみ解析し、未知 schema を報告 |
-| 一部 hosted／specialized tool は Hook 非対応 | tool error／rejection の網羅性 | 観測可能な範囲だけを対応として明記 |
-| Plugin Hooks は trust が必要 | 自動捕捉が開始しない場合がある | `/hooks` を含む onboarding を提示 |
-| Codex Memories は生成管理 | low-confidence auto memory と同じ保存先がない | queue に保持し、Memories を編集しない |
-| `$PLUGIN_DATA` は Skill 共有が非保証 | Hook と Skill の queue 共有 | `$CODEX_HOME/codex-reflect` を使用 |
-| local marketplace Plugin Skill discovery の未解決報告 | local Plugin 開発・検証 | Phase 0 で現行 stable を検証し、再現時は release blocker |
+| Transcript schemas are unstable | History scans, tool analysis, Skill discovery | Parse known schemas only and report unknown schemas |
+| Some hosted or specialized tools do not emit Plugin Hooks | Completeness of tool error and rejection capture | Claim support only for observable records |
+| Plugin Hooks require trust | Automatic capture may not start | Provide onboarding that includes `/hooks` |
+| Codex Memories are generated and managed | No equivalent low-confidence auto-memory target | Keep candidates in the queue and do not edit Memories |
+| `$PLUGIN_DATA` is not guaranteed to be shared with Skills | Shared queue access from Hooks and Skills | Use `$CODEX_HOME/codex-reflect` |
+| Local marketplace Skill discovery has had unresolved reports | Local Plugin development and verification | Verify the current stable release in Phase 0; treat recurrence as a release blocker |
 
-不足 capability を補う独自 daemon、内部 DB parser、Hook trust bypass、Skill の二重 install は採用しない。
+Do not add a custom daemon, internal database parser, Hook trust bypass, or duplicate Skill installation to fill these gaps.
 
 ## 14. Error handling
 
-- semantic timeout／CLI error: heuristic 結果を保持して続行する。
-- Codex 認証なし: semantic validation unavailable と表示し、heuristic review を行う。
-- transcript schema 未対応: 該当 session を skip し、集計を表示する。
-- history 無効／欠落: history-dependent feature のみ unavailable とする。
-- Hook 未 trust: queue が空であることを「学習なし」と誤認せず、Hook status の確認を案内する。
-- global target の権限拒否: 書き込まず、queue と提案を保持する。
-- target concurrent change: 適用を中止して再 review する。
-- malformed queue: 自動初期化せず recovery information を表示する。
-- `skip-reflect` の取消: queue を変更しない。
+- Semantic timeout or CLI error: keep heuristic results and continue.
+- Missing Codex authentication: report semantic validation as unavailable and continue heuristic review.
+- Unsupported transcript schema: skip that session and show a summary.
+- Disabled or missing history: disable only history-dependent features.
+- Untrusted Hooks: do not misreport an empty queue as no learning; direct the user to Hook status.
+- Permission denied for a global target: do not write; preserve the queue and proposal.
+- Concurrent target change: stop and repeat review.
+- Malformed queue: do not reinitialize automatically; show recovery information.
+- Cancelled `skip-reflect`: do not modify the queue.
 
-## 15. 検証戦略
+## 15. Verification strategy
 
 ### 15.1 Phase 0 capability spike
 
-本実装前に最小 Plugin で次を確認する。
+Before full implementation, use a minimal Plugin to verify:
 
-1. Plugin manifest が読み込まれる。
-2. fork 元準拠の 4 Skills が表示・実行できる。
-3. Plugin Hooks が trust 後に発火する。
-4. `UserPromptSubmit` から prompt、cwd、session ID を取得できる。
-5. Hook と Skill の両方から `$CODEX_HOME/codex-reflect` を参照できる。
-6. `codex exec --ephemeral --disable hooks` が再帰せず終了する。
-7. CLI、desktop、IDE が同一 host state を参照する。
+1. Codex loads the Plugin manifest.
+2. All four upstream-named Skills are visible and executable.
+3. Plugin Hooks run after trust.
+4. `UserPromptSubmit` exposes prompt, working directory, and session ID.
+5. Hooks and Skills can both access `$CODEX_HOME/codex-reflect`.
+6. `codex exec --ephemeral --disable hooks` exits without recursion.
+7. CLI, desktop, and IDE use the same host state.
 
-成立しない項目は、機能削除、明示的な制限、release blocker のいずれかに分類する。大規模 workaround には移行しない。
+Classify every failed item as a removed feature, an explicit limitation, or a release blocker. Do not move to a large workaround.
 
-### 15.2 自動テスト
+### 15.2 Automated tests
 
-- 既存 detection、CJK、confidence、decay test
-- Hook input／output contract test
-- active／archived history adapter fixture test
-- unknown transcript schema の safe skip test
-- queue atomic write、lock、corruption test
-- `AGENTS.md` scope routing test
-- `AGENTS.override.md` precedence test
-- Skill 新規生成／既存 Skill 改善 test
-- dry-run の no-write test
-- final confirmation 前の target no-write test
-- semantic subprocess failure の fallback test
-- secret redaction test
-- Windows path、CJK path、UTF-8 test
-- Plugin manifest、Hook config、Skill metadata の contract test
+- existing detection, CJK, confidence, and decay tests
+- Hook input/output contract tests
+- active and archived history adapter fixture tests
+- safe skip tests for unknown transcript schemas
+- queue atomic-write, locking, and corruption tests
+- `AGENTS.md` scope-routing tests
+- `AGENTS.override.md` precedence tests
+- new-Skill and existing-Skill improvement tests
+- no-write tests for dry-run
+- no-write tests before final confirmation
+- semantic subprocess failure fallback tests
+- secret redaction tests
+- Windows path, CJK path, and UTF-8 tests
+- Plugin manifest, Hook configuration, and Skill metadata contract tests
 
-通常 CI は model を呼ばず、semantic response を fixture 化する。GitHub Actions は macOS、Linux、Windows の matrix とする。
+Normal CI must not call a model; use semantic fixtures. GitHub Actions runs on macOS, Linux, and Windows.
 
-### 15.3 手動 E2E
+### 15.3 Manual E2E
 
-1. Plugin install
-2. Hook trust
-3. correction の自動捕捉
-4. `$codex-reflect:view-queue`
-5. `$codex-reflect:reflect --dry-run`
-6. 最終確認後の `AGENTS.md` 更新
-7. active／archived 履歴 scan
-8. `$codex-reflect:reflect-skills`
-9. 生成 Skill の再認識
-10. uninstall 後に承認済み target が保持されること
+1. Install the Plugin.
+2. Trust the Hooks.
+3. Capture a correction automatically.
+4. Run `$codex-reflect:view-queue`.
+5. Run `$codex-reflect:reflect --dry-run`.
+6. Update `AGENTS.md` after final confirmation.
+7. Scan active and archived history.
+8. Run `$codex-reflect:reflect-skills`.
+9. Confirm that Codex discovers the generated Skill.
+10. Confirm approved targets remain after uninstall.
 
-## 16. 対応 version と release
+## 16. Supported versions and release
 
-固定の古い version range を推測せず、capability probe を優先する。release 時点の stable Codex を正式対応とし、必要な Hook、Plugin Skill、履歴がない環境では不足機能を表示する。
+Do not guess a fixed historical version range. Prefer a capability probe. Officially support the stable Codex release verified at release time, and report missing features in environments without the required Hook, Plugin Skill, or history capability.
 
 ### Release gate
 
-- Phase 0 capability spike に未解決 blocker がない。
-- fork 元との outcome parity matrix が完了している。
-- 3 OS の CI が成功している。
-- local E2E が成功している。
-- Claude runtime 依存が残っていない。
-- Hook trust、履歴送信範囲、既知の capability gap が README に記載されている。
-- MIT License 原文と Bayram Annakov 氏の著作権表示が保持されている。
-- fork 元への attribution と主な変更点が README に記載されている。
+- No unresolved blocker remains from the Phase 0 capability spike.
+- The upstream outcome-parity matrix is complete.
+- CI passes on all three operating systems.
+- Local E2E passes.
+- No Claude runtime dependency remains.
+- The README documents Hook trust, history data transfer, and known capability gaps.
+- The original MIT License and Bayram Annakov copyright notice remain.
+- The README attributes the upstream project and summarizes material changes.
 
-## 17. License と attribution
+## 17. License and attribution
 
-MIT License に従い、既存 `LICENSE` の次の表示を保持する。
+Preserve this notice in the existing `LICENSE` under the terms of the MIT License:
 
 ```text
 Copyright (c) 2025 Bayram Annakov
 ```
 
-派生部分の著作権表示を追加する場合も、既存表示と MIT License 本文を削除しない。README には `claude-reflect` の fork であること、upstream URL、Codex 専用化したことを明記する。
+If derivative-work notices are added, do not remove the existing notice or MIT License text. The README must state that this is a Codex-only fork of `claude-reflect` and include the upstream URL.
 
 ## 18. Acceptance criteria
 
-1. 利用者の訂正が Hook により project queue へ自動捕捉される。
-2. `reflect` が semantic validation、routing、review、final confirmation を経て `AGENTS.md` または Skill を更新する。
-3. 最終確認前に `AGENTS.md` と Skills は変更されない。
-4. `reflect-skills` が反復 workflow を根拠付きで提案し、承認された Skill だけを生成する。
-5. `view-queue` と `skip-reflect` が fork 元と同じ成果を提供する。
-6. history-dependent feature は対応 schema で動作し、未対応 schema で安全に停止する。
-7. semantic subprocess の失敗で候補が失われない。
-8. macOS、Linux、Windows で platform-independent test suite が通る。
-9. capability gap が隠されず、利用者へ具体的に表示される。
-10. Codex にない機能を再現するための大規模 workaround が含まれない。
+1. A Hook automatically captures a user correction into the project queue.
+2. `reflect` performs semantic validation, routing, review, and final confirmation before updating `AGENTS.md` or a Skill.
+3. `AGENTS.md` and Skills do not change before final confirmation.
+4. `reflect-skills` proposes repeated workflows with evidence and generates only approved Skills.
+5. `view-queue` and `skip-reflect` provide the same outcomes as upstream.
+6. History-dependent features work with supported schemas and stop safely on unsupported schemas.
+7. Semantic subprocess failure never loses candidates.
+8. The platform-independent test suite passes on macOS, Linux, and Windows.
+9. Capability gaps are shown explicitly to the user.
+10. The project contains no large workaround for a feature Codex does not provide.
 
-## 19. 参照
+## 19. References
 
 - [Codex Hooks](https://learn.chatgpt.com/docs/hooks)
 - [Build Codex plugins](https://learn.chatgpt.com/docs/build-plugins)

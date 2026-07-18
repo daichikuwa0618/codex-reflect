@@ -2,6 +2,7 @@
 """Contract tests for the nested Codex plugin package."""
 
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -31,9 +32,38 @@ POST_TOOL_COMMAND = 'python3 "${PLUGIN_ROOT}/scripts/post_commit_reminder.py"'
 SESSION_START_COMMAND = (
     'python3 "${PLUGIN_ROOT}/scripts/session_start_reminder.py"'
 )
+PUBLIC_DOCUMENTATION = (
+    REPO_ROOT / "AGENTS.md",
+    REPO_ROOT / "CHANGELOG.md",
+    REPO_ROOT / "README.md",
+    REPO_ROOT / "DISTRIBUTION.md",
+    REPO_ROOT / "RELEASING.md",
+    REPO_ROOT
+    / "docs"
+    / "superpowers"
+    / "specs"
+    / "2026-07-18-codex-reflect-design.md",
+    REPO_ROOT
+    / "docs"
+    / "superpowers"
+    / "plans"
+    / "2026-07-18-codex-reflect-implementation.md",
+)
+JAPANESE_PROSE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
 
 
 class TestCodexPluginContract(unittest.TestCase):
+    def test_public_documentation_is_english(self):
+        for path in PUBLIC_DOCUMENTATION:
+            with self.subTest(path=path):
+                text = path.read_text(encoding="utf-8")
+                match = JAPANESE_PROSE.search(text)
+                self.assertIsNone(
+                    match,
+                    f"Japanese prose remains in {path} at offset "
+                    f"{match.start() if match else 'unknown'}",
+                )
+
     def test_claude_runtime_manifests_are_removed(self):
         for path in (
             REPO_ROOT / ".claude-plugin",

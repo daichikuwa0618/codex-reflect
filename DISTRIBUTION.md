@@ -1,8 +1,8 @@
 # Codex marketplace distribution
 
-codex-reflect は repository marketplace と、その配下の Codex Plugin bundle として配布します。
+codex-reflect is distributed as a repository marketplace containing a Codex Plugin bundle.
 
-## 配布構造
+## Package layout
 
 ```text
 .agents/plugins/marketplace.json
@@ -14,11 +14,11 @@ plugins/codex-reflect/
   schemas/
 ```
 
-marketplace の plugin source は repository 内の `./plugins/codex-reflect` を指します。manifest version と release tag は一致させます。
+The marketplace Plugin source points to `./plugins/codex-reflect` inside the repository. The manifest version and release tag must match.
 
-## Local marketplace 検証
+## Local marketplace verification
 
-次の操作は local Codex user state を変更するため、実行前に利用者の承認が必要です。
+The following commands modify local Codex user state and require user approval before execution:
 
 ```bash
 codex plugin marketplace add .
@@ -26,23 +26,23 @@ codex plugin add codex-reflect@codex-reflect-marketplace
 codex plugin list
 ```
 
-インストール後は新しい task で次を確認します。
+After installation, verify the following in a new task:
 
-1. fork 元準拠の 4 Skills が namespace 付きで表示される。
-2. `/hooks` に `UserPromptSubmit`、`PreCompact`、`PostToolUse`、`SessionStart` が表示される。
-3. exact Hook definitions を review / trust した後だけ realtime capture が始まる。
-4. Hook と Skill が同じ `$CODEX_HOME/codex-reflect` state を参照する。
+1. The four upstream-named Skills appear with their namespace.
+2. `/hooks` shows `UserPromptSubmit`, `PreCompact`, `PostToolUse`, and `SessionStart`.
+3. Real-time capture starts only after the exact Hook definitions are reviewed and trusted.
+4. Hooks and Skills use the same `$CODEX_HOME/codex-reflect` state.
 
 ## Git marketplace
 
-公開 repository から追加する例:
+Example for adding the public repository:
 
 ```bash
 codex plugin marketplace add daichikuwa0618/codex-reflect --ref main
 codex plugin add codex-reflect@codex-reflect-marketplace
 ```
 
-release tag を固定する場合は `--ref vX.Y.Z` を使用します。公開前に tag が manifest version と同じ commit を指すことを確認してください。
+Use `--ref vX.Y.Z` to pin a release tag. Before publishing, verify that the tag and manifest version refer to the same commit.
 
 ## Package validation
 
@@ -55,14 +55,14 @@ python -m json.tool plugins/codex-reflect/hooks/hooks.json
 git diff --check
 ```
 
-CI は `ubuntu-latest`、`macos-latest`、`windows-latest` と Python 3.8 / 3.11 の matrix を通します。model を使う semantic smoke は通常 CI に含めず、release 前に quota 利用の承認を得て 1 回だけ行います。
+CI runs a matrix of `ubuntu-latest`, `macos-latest`, and `windows-latest` with Python 3.8 and 3.11. The normal CI suite does not call a model. Run one semantic smoke test before release only after obtaining approval to use quota.
 
 ## Distribution requirements
 
-- [LICENSE](LICENSE) の upstream copyright notice と MIT License 本文を保持する。
-- README に fork 元、provider 送信範囲、Hook trust、transcript schema、Codex Memories、hosted tool の制限を記載する。
-- Plugin cache、system Skill、admin-managed Skill を書き換えない。
-- 旧 runtime bundle や legacy Skill を同梱しない。
-- install / uninstall E2E で、承認済み `AGENTS.md` と Skills が uninstall 後も残ることを確認する。
+- Preserve the upstream copyright notice and full MIT License in [LICENSE](LICENSE).
+- Document upstream attribution, provider data transfer, Hook trust, transcript schema limitations, Codex Memories, and hosted-tool limitations in the README.
+- Never modify Plugin caches, system Skills, or admin-managed Skills.
+- Do not include legacy runtime bundles or legacy Skills.
+- Verify through install/uninstall E2E that approved `AGENTS.md` files and Skills remain after uninstall.
 
-配布先ごとの未確認な reach、互換性、公式 endorsement は記載しません。release 時点の stable Codex で実測した capability だけを support statement に使用します。
+Do not claim unverified reach, compatibility, or official endorsement for any distribution channel. Support statements must reflect capabilities measured on the stable Codex release used for the release.

@@ -2,13 +2,13 @@
 
 ## 1. Version
 
-次を同じ version に更新します。
+Update these locations to the same version:
 
 - `plugins/codex-reflect/.codex-plugin/plugin.json`
-- `README.md` の version badge
-- `CHANGELOG.md` の先頭 release section
+- the version badge in `README.md`
+- the first release section in `CHANGELOG.md`
 
-repository marketplace は nested manifest を参照するため、別の plugin version を持ちません。
+The repository marketplace references the nested manifest and does not carry a separate Plugin version.
 
 ## 2. Automated verification
 
@@ -21,21 +21,21 @@ python -m json.tool plugins/codex-reflect/hooks/hooks.json
 git diff --check
 ```
 
-README に test count を表示する場合は、この fresh run の値だけを反映します。CI の macOS / Linux / Windows、Python 3.8 / 3.11 matrix が成功していることを確認します。
+If the README displays a test count, update it only from this fresh run. Confirm that the macOS, Linux, and Windows CI matrix passes on Python 3.8 and 3.11.
 
 ## 3. Codex E2E
 
-local user state と model quota を使用するため、事前承認を得ます。
+Obtain approval first because these checks use local user state and model quota.
 
-1. marketplace snapshot を追加または更新する。
-2. Plugin を remove / add し、`codex plugin list` で installed / enabled を確認する。
-3. `/hooks` で 4 Hook groups の exact definitions を trust する。
-4. temporary Git repository で `remember:` の realtime capture を確認する。
-5. `view-queue`、`reflect --dry-run`、cancel-before-confirmation、approved apply を確認する。
-6. active / archived history scan と `reflect-skills --dry-run` を確認する。
-7. Plugin を remove し、承認済み `AGENTS.md` と Skills が保持されることを確認する。
+1. Add or update the marketplace snapshot.
+2. Remove and add the Plugin, then confirm `installed, enabled` with `codex plugin list`.
+3. Review and trust the exact definitions of all four Hook groups in `/hooks`.
+4. Confirm real-time capture of `remember:` in a temporary Git repository.
+5. Verify `view-queue`, `reflect --dry-run`, cancellation before confirmation, and approved application.
+6. Verify active and archived history scanning and `reflect-skills --dry-run`.
+7. Remove the Plugin and confirm that approved `AGENTS.md` files and Skills remain.
 
-Desktop app 自身の UI 自動操作や、存在しない IDE surface の代替検証は release gate に見せかけません。実行できない surface は capability gap として記録します。
+Do not present desktop app self-automation or emulation of unavailable IDE surfaces as release gates. Record unavailable surfaces as capability gaps.
 
 ## 4. Runtime dependency scan
 
@@ -43,9 +43,9 @@ Desktop app 自身の UI 自動操作や、存在しない IDE surface の代替
 rg -n "CLAUDE_PLUGIN_ROOT|CLAUDE_PLUGIN_DATA|~/\.claude|claude -p|\.claude-plugin|/reflect-skills|/view-queue|/skip-reflect" plugins AGENTS.md
 ```
 
-Expected: no matches、exit 1。fork attribution と migration history を含む docs / CHANGELOG は対象外です。
+Expected: no matches and exit code 1. Documentation and CHANGELOG entries that contain attribution or migration history are outside this scan.
 
-## 5. Commit, tag, publish
+## 5. Commit, tag, and publish
 
 ```bash
 git status --short --branch
@@ -55,4 +55,4 @@ git push origin main
 git push origin vX.Y.Z
 ```
 
-tag 作成と push は repository を外部変更するため、利用者の明示依頼がある場合だけ実行します。release note には verified Codex version、test matrix、manual E2E 結果、未解決 capability gap を記載します。
+Creating a tag and pushing change external repository state, so perform them only when the user explicitly requests it. Release notes must state the verified Codex version, test matrix, manual E2E results, and unresolved capability gaps.

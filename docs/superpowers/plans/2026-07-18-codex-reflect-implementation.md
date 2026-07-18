@@ -1,24 +1,24 @@
-# codex-reflect Codex 専用化 Implementation Plan
+# codex-reflect Codex-Only Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** `claude-reflect` の feedback loop、履歴分析、Skill 発見を、Codex Hooks・Plugins・Skills・`AGENTS.md` に適合した Codex 専用 OSS Plugin として提供する。
+**Goal:** Deliver the `claude-reflect` feedback loop, history analysis, and Skill discovery as a Codex-only open-source Plugin built for Codex Hooks, Plugins, Skills, and `AGENTS.md`.
 
-**Architecture:** fork 元の検出・confidence・decay・semantic validation ロジックを platform-independent core として維持し、Codex 固有の Hook、履歴、target、state、subprocess を adapter に隔離する。自動捕捉は Hook、対話と最終確認は fork 元準拠の 4 Skills、共有状態は `$CODEX_HOME/codex-reflect` が担当する。
+**Architecture:** Preserve upstream detection, confidence, decay, and semantic-validation logic in a platform-independent core. Isolate Codex-specific Hooks, history, targets, state, and subprocess behavior behind adapters. Hooks own automatic capture, the four upstream-named Skills own interaction and final confirmation, and `$CODEX_HOME/codex-reflect` owns shared state.
 
-**Tech Stack:** Python 3.8+ standard library、Codex Plugin manifest／Hooks／Agent Skills、JSON／JSONL、`unittest`／`pytest`、GitHub Actions（macOS・Linux・Windows）
+**Tech Stack:** Python 3.8+ standard library, Codex Plugin manifest, Hooks, Agent Skills, JSON, JSONL, `unittest`, `pytest`, and GitHub Actions (macOS, Linux, Windows)
 
 ---
 
-## 実装前提
+## Implementation prerequisites
 
-- 承認済み設計: `docs/superpowers/specs/2026-07-18-codex-reflect-design.md`
-- baseline: `python3 -m unittest discover -s tests -v` で 222 tests passing
-- 実装は TDD で進め、各 task を独立 commit にする。
-- Phase 0 の capability spike で Codex 自体の blocker が判明した場合、複雑な workaround を追加せず停止して設計へ戻る。
-- Plugin の install／remove、Hook trust、`$CODEX_HOME` への書き込みは local user state を変更するため、実行前にユーザー承認を得る。
+- Approved design: `docs/superpowers/specs/2026-07-18-codex-reflect-design.md`
+- Baseline: 222 tests pass with `python3 -m unittest discover -s tests -v`.
+- Follow TDD and make each task an independent commit.
+- If the Phase 0 capability spike finds a Codex blocker, stop and revisit the design instead of adding a complex workaround.
+- Obtain user approval before Plugin installation or removal, Hook trust changes, or writes under `$CODEX_HOME`, because these operations change local user state.
 
-## 最終 file map
+## Final file map
 
 ```text
 .agents/
@@ -90,7 +90,7 @@ RELEASING.md
 LICENSE                                  # upstream MIT notice preserved
 ```
 
-## Task 1: Runtime を Codex Plugin bundle 配下へ移す
+## Task 1: Move the runtime into the Codex Plugin bundle
 
 **Files:**
 - Move: `scripts/` -> `plugins/codex-reflect/scripts/`
@@ -101,7 +101,7 @@ LICENSE                                  # upstream MIT notice preserved
 - Modify: `tests/test_semantic_detector.py`
 - Modify: `tests/test_tool_errors.py`
 
-- [ ] **Step 1: 移動前 baseline を実行する**
+- [ ] **Step 1: Run the pre-move baseline**
 
 Run:
 
@@ -109,9 +109,9 @@ Run:
 python3 -m unittest discover -s tests -v
 ```
 
-Expected: `Ran 222 tests`、`OK`。
+Expected: `Ran 222 tests` and `OK`.
 
-- [ ] **Step 2: runtime と asset を Plugin bundle へ移す**
+- [ ] **Step 2: Move runtime files and assets into the Plugin bundle**
 
 Run:
 
@@ -121,7 +121,7 @@ git mv scripts plugins/codex-reflect/scripts
 git mv assets plugins/codex-reflect/assets
 ```
 
-- [ ] **Step 3: tests が旧 path を参照して失敗することを確認する**
+- [ ] **Step 3: Confirm tests fail because they still reference old paths**
 
 Run:
 
@@ -129,11 +129,11 @@ Run:
 python3 -m unittest discover -s tests -v
 ```
 
-Expected: `ModuleNotFoundError: No module named 'lib'` または旧 `scripts/` path の file-not-found で FAIL。
+Expected: FAIL with `ModuleNotFoundError: No module named 'lib'` or a file-not-found error for the old `scripts/` path.
 
-- [ ] **Step 4: 5 test modules の runtime root を更新する**
+- [ ] **Step 4: Update the runtime root in five test modules**
 
-各 file で repository root 直下の `scripts` 参照を次へ置換する。
+In each file, replace the `scripts` reference under the repository root with:
 
 ```python
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -142,9 +142,9 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 ```
 
-`tests/test_integration.py` の `SCRIPTS_DIR`、その他 4 files の `sys.path.insert` を同じ定義へ揃える。test fixture 内で repository root の `scripts` を組み立てている箇所も `PLUGIN_ROOT / "scripts"` に変更する。
+Use the same definition for `SCRIPTS_DIR` in `tests/test_integration.py` and `sys.path.insert` in the other four files. Also change test fixtures that construct the repository-root `scripts` path to `PLUGIN_ROOT / "scripts"`.
 
-- [ ] **Step 5: behavior-preserving move を検証する**
+- [ ] **Step 5: Verify the behavior-preserving move**
 
 Run:
 
@@ -152,7 +152,7 @@ Run:
 python3 -m unittest discover -s tests -v
 ```
 
-Expected: 222 tests passing。
+Expected: 222 tests passing.
 
 - [ ] **Step 6: commit**
 
@@ -161,7 +161,7 @@ git add plugins/codex-reflect tests
 git commit -m "refactor: move runtime into Codex plugin bundle"
 ```
 
-## Task 2: Codex Plugin package contract と Phase 0 scaffold
+## Task 2: Add the Codex Plugin package contract and Phase 0 scaffold
 
 **Files:**
 - Create: `.agents/plugins/marketplace.json`
@@ -174,7 +174,7 @@ git commit -m "refactor: move runtime into Codex plugin bundle"
 - Create: `plugins/codex-reflect/skills/skip-reflect/SKILL.md`
 - Create: `tests/test_codex_plugin_contract.py`
 
-- [ ] **Step 1: package contract の failing tests を書く**
+- [ ] **Step 1: Write failing package contract tests**
 
 ```python
 import json
@@ -217,7 +217,7 @@ class TestCodexPluginContract(unittest.TestCase):
         self.assertTrue(all("CLAUDE_PLUGIN_ROOT" not in command for command in commands))
 ```
 
-- [ ] **Step 2: contract test が fail することを確認する**
+- [ ] **Step 2: Confirm the contract test fails**
 
 Run:
 
@@ -225,9 +225,9 @@ Run:
 python3 -m unittest tests.test_codex_plugin_contract -v
 ```
 
-Expected: manifest または marketplace が存在せず FAIL。
+Expected: FAIL because the manifest or marketplace does not exist.
 
-- [ ] **Step 3: marketplace と manifest を作る**
+- [ ] **Step 3: Create the marketplace and manifest**
 
 `.agents/plugins/marketplace.json`:
 
@@ -262,9 +262,9 @@ Expected: manifest または marketplace が存在せず FAIL。
 }
 ```
 
-- [ ] **Step 4: 4 Skills を discovery probe として作る**
+- [ ] **Step 4: Create four Skills as discovery probes**
 
-各 `SKILL.md` は正しい fork 元名を frontmatter に持たせる。Phase 0 では次のように file 自身の読み込みを明示するだけとし、Task 9〜11 で最終 workflow へ置換する。
+Give every `SKILL.md` the correct upstream name in frontmatter. In Phase 0, have each Skill only confirm its own loading as shown below; Tasks 9 through 11 replace these probes with final workflows.
 
 ```markdown
 ---
@@ -275,11 +275,11 @@ description: Review captured Codex corrections and propose durable AGENTS.md or 
 Resolve `../../scripts/capability_probe_hook.py` relative to this SKILL.md and run it with stdin `{"hook_event_name":"SkillProbe"}`. Report its `systemMessage` and do not edit files.
 ```
 
-残りは `name` を `reflect-skills`、`view-queue`、`skip-reflect` に置換し、同じ write-free probe を実行する。
+For the remaining files, set `name` to `reflect-skills`, `view-queue`, or `skip-reflect` and use the same write-free probe.
 
-- [ ] **Step 5: write-free な Phase 0 Hook probe と config を作る**
+- [ ] **Step 5: Create write-free Phase 0 Hook probes and configuration**
 
-この時点では移植前の runtime Hook を登録しない。`capability_probe_hook.py` は Hook payload の既知 field 名だけを返し、prompt 本文や file を保存しない。
+Do not register pre-port runtime Hooks at this point. `capability_probe_hook.py` returns only known Hook payload field names and does not save prompt contents or files.
 
 ```python
 import json
@@ -351,7 +351,7 @@ if __name__ == "__main__":
 }
 ```
 
-- [ ] **Step 6: package contract を通す**
+- [ ] **Step 6: Pass the package contract**
 
 Run:
 
@@ -359,11 +359,11 @@ Run:
 python3 -m unittest tests.test_codex_plugin_contract -v
 ```
 
-Expected: 3 tests passing。
+Expected: 3 tests passing.
 
-- [ ] **Step 7: Phase 0 の Plugin discovery を手動検証する**
+- [ ] **Step 7: Manually verify Phase 0 Plugin discovery**
 
-この step は user config を変更し Codex quota を 1 invocation 分消費するため、実行前にユーザー承認を得る。
+Obtain user approval before this step because it changes user configuration and consumes one Codex invocation.
 
 Run:
 
@@ -374,9 +374,9 @@ codex plugin list
 printf 'Reply with exactly: codex-reflect semantic probe ok' | codex exec --ephemeral --disable hooks --sandbox read-only --skip-git-repo-check -
 ```
 
-Expected: `codex-reflect@codex-reflect-marketplace` が `installed, enabled`。`codex exec` は 1 回で終了し、Hook probe を再帰させない。CLI、desktop、IDE extension の各 surface で新しい session を開始し、4 Skills の表示、`$codex-reflect:reflect` の probe、`/hooks` の 4 Hook groups を確認する。trust 後、各 event の probe は event 名と既知 field 名だけを返す。各 surface と Skill／Hook の `state_root` が同じであり、実際の `$CODEX_HOME/codex-reflect` directory と project file は作られない。
+Expected: `codex-reflect@codex-reflect-marketplace` is `installed, enabled`. `codex exec` exits after one invocation and does not recurse into Hook probes. Start a new session in the CLI, desktop, and IDE extension; confirm four Skills, the `$codex-reflect:reflect` probe, and four Hook groups under `/hooks`. After trust, each event probe returns only the event name and known field names. Every surface and each Skill/Hook reports the same `state_root`, and no real `$CODEX_HOME/codex-reflect` directory or project file is created.
 
-Skills が表示されない場合は [openai/codex#22078](https://github.com/openai/codex/issues/22078) と同系統かを記録し、この plan の実行を停止する。legacy Skill の二重 install は行わない。
+If Skills do not appear, record whether the issue matches [openai/codex#22078](https://github.com/openai/codex/issues/22078) and stop executing this plan. Do not install duplicate legacy Skills.
 
 - [ ] **Step 8: commit**
 
@@ -385,7 +385,7 @@ git add .agents/plugins plugins/codex-reflect/.codex-plugin plugins/codex-reflec
 git commit -m "feat: add Codex plugin package scaffold"
 ```
 
-## Task 3: Codex paths と共有 StateStore
+## Task 3: Implement Codex paths and the shared StateStore
 
 **Files:**
 - Create: `plugins/codex-reflect/scripts/lib/codex_paths.py`
@@ -396,7 +396,7 @@ git commit -m "feat: add Codex plugin package scaffold"
 - Modify: `tests/test_reflect_utils.py`
 - Modify: `tests/test_memory_hierarchy.py`
 
-- [ ] **Step 1: Codex path の failing tests を書く**
+- [ ] **Step 1: Write failing Codex path tests**
 
 ```python
 import os
@@ -425,7 +425,7 @@ class TestCodexPaths(unittest.TestCase):
         self.assertRegex(first, r"^[a-f0-9]{16}$")
 ```
 
-- [ ] **Step 2: StateStore の failing tests を書く**
+- [ ] **Step 2: Write failing StateStore tests**
 
 ```python
 class TestStateStore(unittest.TestCase):
@@ -462,9 +462,9 @@ class TestStateStore(unittest.TestCase):
             self.assertEqual({item["id"] for item in items}, {str(index) for index in range(32)})
 ```
 
-test module に `from concurrent.futures import ThreadPoolExecutor` を追加する。
+Add `from concurrent.futures import ThreadPoolExecutor` to the test module.
 
-- [ ] **Step 3: tests が import error で fail することを確認する**
+- [ ] **Step 3: Confirm tests fail with import errors**
 
 Run:
 
@@ -472,9 +472,9 @@ Run:
 python3 -m unittest tests.test_codex_paths tests.test_state_store -v
 ```
 
-Expected: `lib.codex_paths`／`lib.state_store` が存在せず FAIL。
+Expected: FAIL because `lib.codex_paths` and `lib.state_store` do not exist.
 
-- [ ] **Step 4: Codex path helpers を実装する**
+- [ ] **Step 4: Implement Codex path helpers**
 
 ```python
 import hashlib
@@ -503,9 +503,9 @@ def get_project_state_dir(project_dir: Optional[str] = None) -> Path:
     return get_codex_home() / "codex-reflect" / "projects" / get_project_id(project_dir)
 ```
 
-- [ ] **Step 5: cross-platform lock と atomic StateStore を実装する**
+- [ ] **Step 5: Implement cross-platform locking and an atomic StateStore**
 
-`state_store.py` は `queue.json.lock` の先頭 1 byte を lock し、保存は同一 directory の temporary file を `os.replace` する。`append` は load から save まで同じ lock を保持し、同時 Hook 実行で update を失わない。
+`state_store.py` locks the first byte of `queue.json.lock` and saves by applying `os.replace` to a temporary file in the same directory. `append` holds the same lock from load through save so concurrent Hook executions do not lose updates.
 
 ```python
 import json
@@ -602,9 +602,9 @@ class StateStore:
             return items
 ```
 
-- [ ] **Step 6: reflect_utils の queue wrapper を Codex state へ切り替える**
+- [ ] **Step 6: Switch the reflect_utils queue wrapper to Codex state**
 
-`get_claude_dir`、legacy global migration、Claude cleanup setting、auto-memory helpers を新 API から外す。既存の `load_queue`、`save_queue`、`append_to_queue` 呼び出し元を壊さない最小 wrapper にする。
+Remove `get_claude_dir`, legacy global migration, Claude cleanup settings, and auto-memory helpers from the new API. Keep the smallest wrapper that preserves existing `load_queue`, `save_queue`, and `append_to_queue` callers.
 
 ```python
 def get_queue_path(project_dir=None):
@@ -627,9 +627,9 @@ def append_to_queue(item, project_dir=None):
     StateStore(get_project_state_dir(project_dir)).append(item)
 ```
 
-Claude memory hierarchy tests は Task 6 の Codex target tests へ置き換えるため、この task では Claude path assertions を削除し、pattern／queue tests を維持する。
+Task 6 replaces Claude memory-hierarchy tests with Codex target tests. In this task, remove Claude path assertions while preserving pattern and queue tests.
 
-- [ ] **Step 7: focused tests と full suite を通す**
+- [ ] **Step 7: Pass focused tests and the full suite**
 
 Run:
 
@@ -638,7 +638,7 @@ python3 -m unittest tests.test_codex_paths tests.test_state_store tests.test_ref
 python3 -m unittest discover -s tests -v
 ```
 
-Expected: all passing。
+Expected: all passing.
 
 - [ ] **Step 8: commit**
 
@@ -647,7 +647,7 @@ git add plugins/codex-reflect/scripts/lib tests
 git commit -m "feat: store queues under Codex home"
 ```
 
-## Task 4: Codex Hook adapter と realtime capture
+## Task 4: Implement the Codex Hook adapter and real-time capture
 
 **Files:**
 - Create: `plugins/codex-reflect/scripts/lib/codex_hooks.py`
@@ -656,7 +656,7 @@ git commit -m "feat: store queues under Codex home"
 - Modify: `plugins/codex-reflect/hooks/hooks.json`
 - Modify: `tests/test_integration.py`
 
-- [ ] **Step 1: Hook input／output の failing tests を書く**
+- [ ] **Step 1: Write failing Hook input/output tests**
 
 ```python
 class TestCodexHookInput(unittest.TestCase):
@@ -679,9 +679,9 @@ class TestCodexHookInput(unittest.TestCase):
         )
 ```
 
-Integration test は temporary `CODEX_HOME` と Hook JSON を subprocess stdin に渡し、生成された `$CODEX_HOME/codex-reflect/projects/*/queue.json` に 1 item が入ることを assert する。
+The integration test passes a temporary `CODEX_HOME` and Hook JSON through subprocess stdin and asserts that the generated `$CODEX_HOME/codex-reflect/projects/*/queue.json` contains one item.
 
-- [ ] **Step 2: failing tests を確認する**
+- [ ] **Step 2: Confirm the tests fail**
 
 Run:
 
@@ -689,9 +689,9 @@ Run:
 python3 -m unittest tests.test_codex_hooks tests.test_integration.TestCaptureLearning -v
 ```
 
-Expected: `HookEvent` が未定義、または queue path 不一致で FAIL。
+Expected: FAIL because `HookEvent` is undefined or the queue path does not match.
 
-- [ ] **Step 3: Codex Hook adapter を実装する**
+- [ ] **Step 3: Implement the Codex Hook adapter**
 
 ```python
 from dataclasses import dataclass
@@ -729,9 +729,9 @@ def system_message(message):
     return {"continue": True, "systemMessage": message}
 ```
 
-- [ ] **Step 4: capture_learning.py を Codex payload と state に接続する**
+- [ ] **Step 4: Connect capture_learning.py to Codex payloads and state**
 
-`prompt` を `HookEvent.prompt` からのみ取得し、queue item に `schema_version=1`、`session_id`、`turn_id`、`model`、`source="hook"` を追加する。保存時の project は `event.cwd` とする。成功時 stdout は JSON だけにする。
+Read `prompt` only from `HookEvent.prompt`. Add `schema_version=1`, `session_id`, `turn_id`, `model`, and `source="hook"` to the queue item. Use `event.cwd` as the project when saving. On success, write JSON only to stdout.
 
 ```python
 event = HookEvent.from_dict(json.loads(sys.stdin.read()))
@@ -756,11 +756,11 @@ if item_type:
     print(json.dumps(system_message("codex-reflect captured a learning candidate")))
 ```
 
-exception は stderr に warning を出して exit 0 とし、Codex turn を block しない。
+On exception, write a warning to stderr and exit 0 so the Codex turn is not blocked.
 
-`hooks/hooks.json` の `UserPromptSubmit` command だけを probe から `capture_learning.py` に切り替える。ほかの 3 events は Task 5 が完了するまで write-free probe のままにする。
+Switch only the `UserPromptSubmit` command in `hooks/hooks.json` from the probe to `capture_learning.py`. Keep the other three events on write-free probes until Task 5 is complete.
 
-- [ ] **Step 5: focused tests と full suite を通す**
+- [ ] **Step 5: Pass focused tests and the full suite**
 
 Run:
 
@@ -769,7 +769,7 @@ python3 -m unittest tests.test_codex_hooks tests.test_integration.TestCaptureLea
 python3 -m unittest discover -s tests -v
 ```
 
-Expected: all passing。
+Expected: all passing.
 
 - [ ] **Step 6: commit**
 
@@ -778,7 +778,7 @@ git add plugins/codex-reflect/scripts tests
 git commit -m "feat: capture Codex prompt feedback from hooks"
 ```
 
-## Task 5: SessionStart・PreCompact・PostToolUse lifecycle
+## Task 5: Implement the SessionStart, PreCompact, and PostToolUse lifecycle
 
 **Files:**
 - Delete: `plugins/codex-reflect/scripts/capability_probe_hook.py`
@@ -788,7 +788,7 @@ git commit -m "feat: capture Codex prompt feedback from hooks"
 - Modify: `plugins/codex-reflect/hooks/hooks.json`
 - Modify: `tests/test_integration.py`
 
-- [ ] **Step 1: Codex lifecycle output の failing integration tests を書く**
+- [ ] **Step 1: Write failing integration tests for Codex lifecycle output**
 
 ```python
 def test_session_start_returns_codex_system_message(self):
@@ -815,9 +815,9 @@ def test_post_tool_use_detects_non_amend_commit(self):
     self.assertIn("Git commit detected", json.loads(stdout)["systemMessage"])
 ```
 
-test helper `run_python_script` は `env=None` parameter を追加し、既存の `subprocess.run` 呼び出しへ keyword argument `env=env` を追加する。`setUp` では host の environment を copy して temporary `CODEX_HOME` だけを上書きする。
+Add an `env=None` parameter to the `run_python_script` test helper and pass the `env=env` keyword argument to the existing `subprocess.run` call. In `setUp`, copy the host environment and override only `CODEX_HOME` with a temporary directory.
 
-- [ ] **Step 2: existing Claude output との差で fail することを確認する**
+- [ ] **Step 2: Confirm tests fail because existing output is Claude-specific**
 
 Run:
 
@@ -825,19 +825,19 @@ Run:
 python3 -m unittest tests.test_integration.TestSessionStartReminder tests.test_integration.TestCheckLearnings tests.test_integration.TestPostCommitReminder -v
 ```
 
-Expected: plain text または Claude-specific response shape のため FAIL。
+Expected: FAIL because the output is plain text or uses a Claude-specific response shape.
 
-- [ ] **Step 3: 3 hooks を共通 adapter と StateStore に切り替える**
+- [ ] **Step 3: Move three Hooks to the shared adapter and StateStore**
 
-- `session_start_reminder.py`: `event.cwd` の queue を最大 5 件表示し、未初期化なら「`reflect --scan-history` を提案する」文を含む `systemMessage` を返す。
-- `check_learnings.py`: queue が空なら no output、存在すれば `backups/pre-compact-<timestamp>.json` を atomic write し JSON `systemMessage` を返す。
-- `post_commit_reminder.py`: `HookEvent.tool_input` の `cmd` を読み、値がない Codex build だけ `command` を読む。string または string list を正規化し、`git commit` を含み `--amend` を含まない場合だけ JSON `systemMessage` を返す。その他の nested fields や tool output は読まない。
+- `session_start_reminder.py`: show up to five queue items for `event.cwd`; when uninitialized, return a `systemMessage` that suggests `reflect --scan-history`.
+- `check_learnings.py`: produce no output for an empty queue; otherwise atomically write `backups/pre-compact-<timestamp>.json` and return a JSON `systemMessage`.
+- `post_commit_reminder.py`: read `cmd` from `HookEvent.tool_input`, falling back to `command` only for Codex builds where `cmd` is absent. Normalize a string or list of strings, and return a JSON `systemMessage` only when the command contains `git commit` but not `--amend`. Do not read other nested fields or tool output.
 
-各 script は空 stdin、invalid JSON、I/O error で exit 0 とする。
+Every script exits 0 for empty stdin, invalid JSON, or I/O errors.
 
-`hooks/hooks.json` の `SessionStart`、`PreCompact`、`PostToolUse` commands をそれぞれ完成した script に切り替える。これで Phase 0 probe は runtime Hook から外れるため、`capability_probe_hook.py` は package から削除し、contract test で参照が残っていないことを確認する。
+Switch the `SessionStart`, `PreCompact`, and `PostToolUse` commands in `hooks/hooks.json` to their completed scripts. This removes Phase 0 probes from runtime Hooks, so delete `capability_probe_hook.py` from the package and use a contract test to confirm no references remain.
 
-- [ ] **Step 4: tests を通す**
+- [ ] **Step 4: Pass the tests**
 
 Run:
 
@@ -846,7 +846,7 @@ python3 -m unittest tests.test_integration -v
 python3 -m unittest discover -s tests -v
 ```
 
-Expected: all passing。
+Expected: all passing.
 
 - [ ] **Step 5: commit**
 
@@ -855,7 +855,7 @@ git add plugins/codex-reflect/scripts tests/test_integration.py
 git commit -m "feat: adapt reflect lifecycle hooks for Codex"
 ```
 
-## Task 6: `AGENTS.md`／Skill TargetResolver
+## Task 6: Implement the `AGENTS.md` and Skill TargetResolver
 
 **Files:**
 - Create: `plugins/codex-reflect/scripts/lib/target_resolver.py`
@@ -863,7 +863,7 @@ git commit -m "feat: adapt reflect lifecycle hooks for Codex"
 - Replace: `tests/test_memory_hierarchy.py`
 - Modify: `plugins/codex-reflect/scripts/lib/reflect_utils.py`
 
-- [ ] **Step 1: active instruction chain の failing tests を書く**
+- [ ] **Step 1: Write failing tests for the active instruction chain**
 
 ```python
 class TestTargetResolver(unittest.TestCase):
@@ -887,7 +887,7 @@ class TestTargetResolver(unittest.TestCase):
         self.assertEqual(resolver.repo_skill_root(self.repo), self.repo / ".agents" / "skills")
 ```
 
-- [ ] **Step 2: target suggestion の failing tests を書く**
+- [ ] **Step 2: Write failing target-suggestion tests**
 
 ```python
 def test_path_specific_learning_prefers_nearest_agents_file(self):
@@ -900,7 +900,7 @@ def test_cross_project_skill_prefers_user_scope(self):
     self.assertEqual(target, self.home / ".agents" / "skills")
 ```
 
-- [ ] **Step 3: failing tests を確認する**
+- [ ] **Step 3: Confirm the tests fail**
 
 Run:
 
@@ -908,9 +908,9 @@ Run:
 python3 -m unittest tests.test_target_resolver -v
 ```
 
-Expected: `TargetResolver` が未定義で FAIL。
+Expected: FAIL because `TargetResolver` is undefined.
 
-- [ ] **Step 4: active file と Skill root を解決する**
+- [ ] **Step 4: Resolve active files and Skill roots**
 
 ```python
 import subprocess
@@ -983,24 +983,24 @@ class TargetResolver:
         return self.repo_skill_root(repo_root)
 ```
 
-root から cwd までの各 directory で active file を 1 件だけ選ぶ。`suggest_instruction_target` の production implementation は learning の evidence path を受け取り、path-specific evidence がある場合だけその directory を `cwd` として渡す。一般的な project learning は repository root を渡す。
+Select exactly one active file in every directory from the root to the working directory. The production implementation of `suggest_instruction_target` accepts the learning evidence path and passes its directory as `cwd` only for path-specific evidence. General project learning passes the repository root.
 
-- [ ] **Step 5: fork 元の routing を Codex targets に変換する**
+- [ ] **Step 5: Map upstream routing to Codex targets**
 
 - global behavior -> active global `AGENTS` file
 - project behavior -> repository root `AGENTS.md`
-- path-specific -> nearest nested active `AGENTS` file、未作成ならその directory の `AGENTS.md` proposal
-- skill correction -> writable authoring source の既存 Skill
+- path-specific -> nearest nested active `AGENTS` file, or a proposal for `AGENTS.md` in that directory if none exists
+- skill correction -> existing Skill with a writable authoring source
 - multi-project workflow -> user Skill root
-- low confidence -> queue のまま
+- low confidence -> remain in the queue
 
-Plugin cache、system、admin-managed Skill は write target に返さず `read_only=True` の suggestion とする。
+Return Plugin cache, system, and admin-managed Skills only as `read_only=True` suggestions, never as write targets.
 
-- [ ] **Step 6: Claude memory hierarchy tests を Codex routing tests に置換する**
+- [ ] **Step 6: Replace Claude memory-hierarchy tests with Codex routing tests**
 
-`tests/test_memory_hierarchy.py` は `TestAgentsHierarchy`、`TestSkillRouting`、`TestReadOnlyPluginSkill` へ置き換え、`.claude/rules`、`CLAUDE.local.md`、auto memory assertions を削除する。
+Replace `tests/test_memory_hierarchy.py` with `TestAgentsHierarchy`, `TestSkillRouting`, and `TestReadOnlyPluginSkill`. Remove assertions for `.claude/rules`, `CLAUDE.local.md`, and auto memory.
 
-- [ ] **Step 7: tests を通す**
+- [ ] **Step 7: Pass the tests**
 
 Run:
 
@@ -1009,7 +1009,7 @@ python3 -m unittest tests.test_target_resolver tests.test_memory_hierarchy -v
 python3 -m unittest discover -s tests -v
 ```
 
-Expected: all passing。
+Expected: all passing.
 
 - [ ] **Step 8: commit**
 
@@ -1018,7 +1018,7 @@ git add plugins/codex-reflect/scripts/lib tests
 git commit -m "feat: route learnings to Codex guidance targets"
 ```
 
-## Task 7: Codex history adapter と redaction
+## Task 7: Implement the Codex history adapter and redaction
 
 **Files:**
 - Create: `plugins/codex-reflect/scripts/lib/codex_history.py`
@@ -1033,9 +1033,9 @@ git commit -m "feat: route learnings to Codex guidance targets"
 - Modify: `tests/test_reflect_utils.py`
 - Modify: `tests/test_tool_errors.py`
 
-- [ ] **Step 1: sanitized Codex transcript fixtures を追加する**
+- [ ] **Step 1: Add sanitized Codex transcript fixtures**
 
-`rollout-v1.jsonl` は実データを含めず、現在確認済みの record shape を再現する。
+`rollout-v1.jsonl` contains no real user data and reproduces only the currently verified record shape.
 
 ```jsonl
 {"type":"session_meta","payload":{"id":"session-1","cwd":"/repo","timestamp":"2026-07-18T00:00:00Z"}}
@@ -1049,7 +1049,7 @@ git commit -m "feat: route learnings to Codex guidance targets"
 {"type":"future_record","payload":{"body":"no, use another parser"}}
 ```
 
-- [ ] **Step 2: history normalization の failing tests を書く**
+- [ ] **Step 2: Write failing history-normalization tests**
 
 ```python
 class TestCodexHistory(unittest.TestCase):
@@ -1070,7 +1070,7 @@ class TestCodexHistory(unittest.TestCase):
         self.assertEqual(files, sorted([self.active, self.archived]))
 ```
 
-- [ ] **Step 3: secret redaction の failing tests を書く**
+- [ ] **Step 3: Write failing secret-redaction tests**
 
 ```python
 def test_redacts_assignment_and_bearer_token(self):
@@ -1080,7 +1080,7 @@ def test_redacts_assignment_and_bearer_token(self):
     self.assertEqual(value.count("[REDACTED]"), 2)
 ```
 
-- [ ] **Step 4: failing tests を確認する**
+- [ ] **Step 4: Confirm the tests fail**
 
 Run:
 
@@ -1088,9 +1088,9 @@ Run:
 python3 -m unittest tests.test_codex_history -v
 ```
 
-Expected: modules が存在せず FAIL。
+Expected: FAIL because the modules do not exist.
 
-- [ ] **Step 5: normalized history model と schema detection を実装する**
+- [ ] **Step 5: Implement the normalized history model and schema detection**
 
 ```python
 @dataclass
@@ -1166,21 +1166,21 @@ def parse_transcript(path):
     )
 ```
 
-同じ message が `event_msg` と `response_item` の両方に現れる場合は、出現順を維持して exact text duplicate を 1 件にする。`sessions/**/*.jsonl` と `archived_sessions/**/*.jsonl` を列挙し、SQLite や UI cache は読まない。
+When the same message appears in both `event_msg` and `response_item`, preserve occurrence order and collapse exact text duplicates to one item. Enumerate `sessions/**/*.jsonl` and `archived_sessions/**/*.jsonl`; do not read SQLite databases or UI caches.
 
-- [ ] **Step 6: local redaction を実装する**
+- [ ] **Step 6: Implement local redaction**
 
-`redaction.py` は assignment、Bearer、JWT、OpenAI／GitHub style token を対象に、値だけを `[REDACTED]` へ置換する。入力を log に出さない。
+`redaction.py` targets assignments, Bearer values, JWTs, and OpenAI/GitHub-style tokens, replacing only the value with `[REDACTED]`. Never log the input.
 
-- [ ] **Step 7: 3 extraction scripts を adapter 経由へ変更する**
+- [ ] **Step 7: Route three extraction scripts through the adapter**
 
 - `extract_session_learnings.py`: `TranscriptResult.user_messages`
-- `extract_tool_errors.py`: `TranscriptResult.tool_outputs` から existing error pattern を適用
-- `extract_tool_rejections.py`: known user rejection text がある record だけを利用
+- `extract_tool_errors.py`: apply existing error patterns to `TranscriptResult.tool_outputs`
+- `extract_tool_rejections.py`: use only records containing known user-rejection text
 
-`reflect_utils.extract_user_messages`、`extract_tool_errors`、`extract_tool_rejections` は adapter wrapper にして、既存 detection／aggregation API を維持する。
+Turn `reflect_utils.extract_user_messages`, `extract_tool_errors`, and `extract_tool_rejections` into adapter wrappers while preserving the existing detection and aggregation APIs.
 
-- [ ] **Step 8: focused tests と full suite を通す**
+- [ ] **Step 8: Pass focused tests and the full suite**
 
 Run:
 
@@ -1189,7 +1189,7 @@ python3 -m unittest tests.test_codex_history tests.test_reflect_utils tests.test
 python3 -m unittest discover -s tests -v
 ```
 
-Expected: all passing。
+Expected: all passing.
 
 - [ ] **Step 9: commit**
 
@@ -1207,7 +1207,7 @@ git commit -m "feat: parse supported Codex session history"
 - Modify: `plugins/codex-reflect/scripts/lib/semantic_detector.py`
 - Modify: `tests/test_semantic_detector.py`
 
-- [ ] **Step 1: Codex command contract の failing tests を書く**
+- [ ] **Step 1: Write failing Codex command-contract tests**
 
 ```python
 @patch("lib.semantic_detector.subprocess.run")
@@ -1257,9 +1257,9 @@ def test_semantic_analyze_redacts_before_subprocess(self, run):
     semantic_analyze("API_KEY=secret-value")
 ```
 
-既存 `test_claude_*` 名を `test_codex_*` に変更し、`claude -p` command assertions を Codex flags へ置換する。
+Rename existing `test_claude_*` tests to `test_codex_*` and replace `claude -p` command assertions with Codex flags.
 
-- [ ] **Step 2: tests が旧 Claude command のため fail することを確認する**
+- [ ] **Step 2: Confirm tests fail because they expect the old Claude command**
 
 Run:
 
@@ -1267,11 +1267,11 @@ Run:
 python3 -m unittest tests.test_semantic_detector -v
 ```
 
-Expected: command[0] が `claude` のため FAIL。
+Expected: FAIL because `command[0]` is `claude`.
 
-- [ ] **Step 3: 3 JSON Schemas を追加する**
+- [ ] **Step 3: Add three JSON Schemas**
 
-learning schema の required fields:
+Required fields in the learning schema:
 
 ```json
 {
@@ -1289,9 +1289,9 @@ learning schema の required fields:
 }
 ```
 
-tool error schema は `is_learnable`、`refined_guideline`、`confidence`、`reasoning`、contradiction schema は `contradictions[]` の `entry1`、`entry2`、`conflict` を同様に required とする。
+The tool-error schema requires `is_learnable`, `refined_guideline`, `confidence`, and `reasoning`. The contradiction schema likewise requires `entry1`, `entry2`, and `conflict` inside `contradictions[]`.
 
-- [ ] **Step 4: Codex subprocess runner を実装する**
+- [ ] **Step 4: Implement the Codex subprocess runner**
 
 ```python
 def _run_codex(prompt, schema_path, timeout, model=None):
@@ -1324,9 +1324,9 @@ def _run_codex(prompt, schema_path, timeout, model=None):
         return json.loads(output_path.read_text(encoding="utf-8"))
 ```
 
-model 未指定時は Codex の current default を使い、特定の model slug を hardcode しない。既存 `_validate_response`、queue fallback、tool error、contradiction validation は維持し、prompt 内の `CLAUDE.md` 表記を `AGENTS.md`／Skill guidance に変更する。
+When no model is specified, use the current Codex default and do not hard-code a model slug. Preserve existing `_validate_response`, queue fallback, tool-error validation, and contradiction validation. Replace `CLAUDE.md` wording in prompts with `AGENTS.md` or Skill guidance.
 
-- [ ] **Step 5: tests と schema parse を通す**
+- [ ] **Step 5: Pass tests and schema parsing**
 
 Run:
 
@@ -1338,11 +1338,11 @@ python3 -m json.tool plugins/codex-reflect/schemas/contradictions.schema.json
 python3 -m unittest discover -s tests -v
 ```
 
-Expected: all passing。
+Expected: all passing.
 
-- [ ] **Step 6: live semantic smoke test を承認付きで実行する**
+- [ ] **Step 6: Run an approved live semantic smoke test**
 
-Codex quota を消費するためユーザー承認後に実行する。
+Run this only after user approval because it consumes Codex quota.
 
 Run:
 
@@ -1350,7 +1350,7 @@ Run:
 python3 -c "import sys; sys.path.insert(0, 'plugins/codex-reflect/scripts'); from lib.semantic_detector import semantic_analyze; print(semantic_analyze('remember: run focused tests'))"
 ```
 
-Expected: `is_learning=True`、`type='explicit'` を含む dict。新しい Codex session file は増えない。
+Expected: a dictionary containing `is_learning=True` and `type='explicit'`. No new Codex session file is created.
 
 - [ ] **Step 7: commit**
 
@@ -1359,7 +1359,7 @@ git add plugins/codex-reflect/schemas plugins/codex-reflect/scripts/lib/semantic
 git commit -m "feat: validate learnings with Codex exec"
 ```
 
-## Task 9: `view-queue` と `skip-reflect` Skills
+## Task 9: Implement the `view-queue` and `skip-reflect` Skills
 
 **Files:**
 - Modify: `plugins/codex-reflect/scripts/read_queue.py`
@@ -1368,7 +1368,7 @@ git commit -m "feat: validate learnings with Codex exec"
 - Modify: `plugins/codex-reflect/skills/skip-reflect/SKILL.md`
 - Create: `tests/test_queue_commands.py`
 
-- [ ] **Step 1: queue command の failing tests を書く**
+- [ ] **Step 1: Write failing queue-command tests**
 
 ```python
 class TestQueueCommands(unittest.TestCase):
@@ -1389,7 +1389,7 @@ class TestQueueCommands(unittest.TestCase):
         self.assertEqual(self.load_queue(), [])
 ```
 
-- [ ] **Step 2: failing tests を確認する**
+- [ ] **Step 2: Confirm the tests fail**
 
 Run:
 
@@ -1397,13 +1397,13 @@ Run:
 python3 -m unittest tests.test_queue_commands -v
 ```
 
-Expected: formatted output／clear command が未実装で FAIL。
+Expected: FAIL because formatted output and the clear command are not implemented.
 
-- [ ] **Step 3: deterministic queue commands を実装する**
+- [ ] **Step 3: Implement deterministic queue commands**
 
-`read_queue.py` は `--json` なら raw JSON、それ以外は fork 元の `[0.85] "message" (pattern) - relative time` を表示する。`clear_queue.py` は `--confirm` がなければ exit 2、あれば removed items を stdout JSON に出して clear する。
+`read_queue.py` outputs raw JSON with `--json`; otherwise it uses the upstream `[0.85] "message" (pattern) - relative time` format. `clear_queue.py` exits 2 without `--confirm`; with confirmation, it clears the queue and writes removed items as JSON to stdout.
 
-- [ ] **Step 4: 2 Skills を最終 workflow へ置換する**
+- [ ] **Step 4: Replace two Skill probes with final workflows**
 
 `view-queue/SKILL.md`:
 
@@ -1416,9 +1416,9 @@ description: View codex-reflect learning candidates for the current project with
 Resolve `../../scripts/read_queue.py` relative to this SKILL.md and run it with the current working directory unchanged. Return its formatted output verbatim. Do not modify queue or target files.
 ```
 
-`skip-reflect/SKILL.md` は `read_queue.py --json` で一覧を取得し、件数と message preview を提示して確認する。承認後だけ `clear_queue.py --confirm` を実行し、取消時は何も実行しない。
+`skip-reflect/SKILL.md` uses `read_queue.py --json` to retrieve items, then presents the count and message previews for confirmation. It runs `clear_queue.py --confirm` only after approval and does nothing when cancelled.
 
-- [ ] **Step 5: tests を通す**
+- [ ] **Step 5: Pass the tests**
 
 Run:
 
@@ -1427,7 +1427,7 @@ python3 -m unittest tests.test_queue_commands tests.test_codex_plugin_contract -
 python3 -m unittest discover -s tests -v
 ```
 
-Expected: all passing。
+Expected: all passing.
 
 - [ ] **Step 6: commit**
 
@@ -1436,7 +1436,7 @@ git add plugins/codex-reflect/scripts plugins/codex-reflect/skills tests
 git commit -m "feat: add Codex queue management skills"
 ```
 
-## Task 10: `reflect` preparation command と Skill workflow
+## Task 10: Implement the `reflect` preparation command and Skill workflow
 
 **Files:**
 - Create: `plugins/codex-reflect/scripts/commands/__init__.py`
@@ -1444,7 +1444,7 @@ git commit -m "feat: add Codex queue management skills"
 - Modify: `plugins/codex-reflect/skills/reflect/SKILL.md`
 - Create: `tests/test_reflect_command.py`
 
-- [ ] **Step 1: argument contract と no-write の failing tests を書く**
+- [ ] **Step 1: Write failing argument-contract and no-write tests**
 
 ```python
 class TestReflectCommand(unittest.TestCase):
@@ -1471,7 +1471,7 @@ class TestReflectCommand(unittest.TestCase):
         self.assertEqual(result["history"]["unsupported_sessions"], 1)
 ```
 
-- [ ] **Step 2: failing tests を確認する**
+- [ ] **Step 2: Confirm the tests fail**
 
 Run:
 
@@ -1479,9 +1479,9 @@ Run:
 python3 -m unittest tests.test_reflect_command -v
 ```
 
-Expected: `commands.reflect` が未定義で FAIL。
+Expected: FAIL because `commands.reflect` is undefined.
 
-- [ ] **Step 3: parse_args と preparation pipeline を実装する**
+- [ ] **Step 3: Implement parse_args and the preparation pipeline**
 
 ```python
 def parse_args(argv=None):
@@ -1498,7 +1498,7 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 ```
 
-`prepare_reflection` は queue、history adapter、semantic adapter、TargetResolver を順に呼び、次の shape の JSON-serializable dict を返す。値は example であり、key と value type を contract とする。
+`prepare_reflection` invokes the queue, history adapter, semantic adapter, and `TargetResolver` in order, then returns a JSON-serializable dictionary with the following shape. Values are examples; keys and value types define the contract.
 
 ```json
 {
@@ -1511,27 +1511,27 @@ def parse_args(argv=None):
 }
 ```
 
-候補の semantic failure は item に `semantic_status="unavailable"` を付け、削除しない。explicit item は必ず candidates に残す。`--targets` は target list だけ、`--review` は stale を含む queue、`--dedupe`／`--organize` は該当 analysis を追加する。command 自身は `AGENTS.md`／Skills を編集しない。capability summary は Task 12 でこの response に追加する。
+On semantic failure, mark the item with `semantic_status="unavailable"` and do not remove it. Always retain explicit items in `candidates`. `--targets` returns only the target list, `--review` includes stale queue items, and `--dedupe` or `--organize` adds the corresponding analysis. The command itself never edits `AGENTS.md` or Skills. Task 12 adds a capability summary to this response.
 
-- [ ] **Step 4: `reflect` Skill に human review gate を記述する**
+- [ ] **Step 4: Define the human-review gate in the `reflect` Skill**
 
-Skill は preparation command の JSON を読み、次を順番に行う。
+The Skill reads JSON from the preparation command and performs these steps in order:
 
-1. 初回 history scan の scope／provider 送信内容を説明し承認を得る。
-2. candidate summary を表示する。
-3. apply all／select／details／skip を選ばせる。
-4. target routing を候補ごとに確認する。
-5. exact file diff を作る。
-6. final confirmation を得る。
-7. confirmation 後だけ edit tool で `AGENTS.md`／writable Skill を変更する。
-8. target が review 中に変わっていたら中止して diff を再生成する。
-9. applied items だけ queue から削除する。
+1. Explain the first history scan scope and provider data transfer, then obtain approval.
+2. Show a candidate summary.
+3. Ask the user to apply all, select, review details, or skip.
+4. Confirm target routing for each candidate.
+5. Create the exact file diff.
+6. Obtain final confirmation.
+7. Change `AGENTS.md` or a writable Skill with the edit tool only after confirmation.
+8. If a target changed during review, stop and regenerate the diff.
+9. Remove only applied items from the queue.
 
-`--dry-run` は step 3 以降の質問と書き込みを行わず proposal を表示して終了する。read-only Plugin／system Skill は改善案だけを表示する。Codex Memories は読まない・書かない。
+With `--dry-run`, stop after displaying the proposal without questions from step 3 onward or any writes. Show only improvement proposals for read-only Plugin or system Skills. Never read or write Codex Memories.
 
-- [ ] **Step 5: Skill contract test と focused tests を通す**
+- [ ] **Step 5: Pass the Skill contract test and focused tests**
 
-`tests/test_codex_plugin_contract.py` に、`reflect/SKILL.md` が 9 workflow keywords（`dry-run`、`scan-history`、`apply all`、`select`、`details`、`skip`、`final confirmation`、`AGENTS.md`、`queue`）を含む test を追加する。
+Add a test to `tests/test_codex_plugin_contract.py` requiring `reflect/SKILL.md` to contain nine workflow keywords: `dry-run`, `scan-history`, `apply all`, `select`, `details`, `skip`, `final confirmation`, `AGENTS.md`, and `queue`.
 
 Run:
 
@@ -1540,7 +1540,7 @@ python3 -m unittest tests.test_reflect_command tests.test_codex_plugin_contract 
 python3 -m unittest discover -s tests -v
 ```
 
-Expected: all passing。
+Expected: all passing.
 
 - [ ] **Step 6: commit**
 
@@ -1556,7 +1556,7 @@ git commit -m "feat: add reviewed Codex reflection workflow"
 - Modify: `plugins/codex-reflect/skills/reflect-skills/SKILL.md`
 - Create: `tests/test_reflect_skills_command.py`
 
-- [ ] **Step 1: discovery input の failing tests を書く**
+- [ ] **Step 1: Write failing discovery-input tests**
 
 ```python
 class TestReflectSkillsCommand(unittest.TestCase):
@@ -1577,7 +1577,7 @@ class TestReflectSkillsCommand(unittest.TestCase):
         self.assertEqual({item["name"] for item in result}, {"deploy", "daily-review"})
 ```
 
-- [ ] **Step 2: failing tests を確認する**
+- [ ] **Step 2: Confirm the tests fail**
 
 Run:
 
@@ -1585,11 +1585,11 @@ Run:
 python3 -m unittest tests.test_reflect_skills_command -v
 ```
 
-Expected: module が存在せず FAIL。
+Expected: FAIL because the module does not exist.
 
-- [ ] **Step 3: deterministic discovery input collector を実装する**
+- [ ] **Step 3: Implement the deterministic discovery-input collector**
 
-`parse_args` は `--days` default 14、`--project`、`--all-projects`、`--dry-run` を持つ。collector は supported transcripts の user messages、cwd、timestamp、既存 Skill metadata を JSON で返す。
+`parse_args` supports `--days` with a default of 14, `--project`, `--all-projects`, and `--dry-run`. The collector returns user messages, working directories, timestamps, and existing Skill metadata from supported transcripts as JSON.
 
 ```python
 @dataclass(frozen=True)
@@ -1663,24 +1663,24 @@ def collect_discovery_input(context, days=14, project=None, all_projects=False):
     }
 ```
 
-test fixture の `context.now` と transcript timestamp は timezone-aware UTC に統一する。pattern clustering と Skill 内容生成は Skill を実行している Codex が行い、hardcoded keyword cluster は作らない。
+Normalize `context.now` and transcript timestamps in test fixtures to timezone-aware UTC. The Codex instance running the Skill performs pattern clustering and Skill-content generation; do not add hard-coded keyword clusters.
 
-- [ ] **Step 4: `reflect-skills` Skill を最終 workflow へ置換する**
+- [ ] **Step 4: Replace the `reflect-skills` probe with the final workflow**
 
-Skill は collector JSON から次を行う。
+The Skill performs these steps from collector JSON:
 
-1. multi-step intent／workflow を semantic に比較する。
-2. 同じ intent が複数回ある候補だけを提示する。
-3. existing Skill と同義なら improvement として分類する。
-4. name、description、evidence count、source projects を表示する。
-5. 生成候補と配置先を確認する。
-6. repository scope は `$REPO_ROOT/.agents/skills/<name>/SKILL.md`、cross-project は `$HOME/.agents/skills/<name>/SKILL.md` を提案する。
-7. final confirmation 後だけ valid frontmatter を持つ Skill を生成する。
-8. `--dry-run` は file を生成しない。
+1. Compare multi-step intent and workflow semantically.
+2. Present only candidates whose intent appears multiple times.
+3. Classify semantic matches with existing Skills as improvements.
+4. Show the name, description, evidence count, and source projects.
+5. Confirm the candidate and destination.
+6. Propose `$REPO_ROOT/.agents/skills/<name>/SKILL.md` for repository scope and `$HOME/.agents/skills/<name>/SKILL.md` for cross-project scope.
+7. Generate a Skill with valid frontmatter only after final confirmation.
+8. Never generate a file during `--dry-run`.
 
-Plugin cache、system、admin-managed Skill は直接編集しない。
+Do not edit Plugin cache, system, or admin-managed Skills directly.
 
-- [ ] **Step 5: tests を通す**
+- [ ] **Step 5: Pass the tests**
 
 Run:
 
@@ -1689,7 +1689,7 @@ python3 -m unittest tests.test_reflect_skills_command tests.test_codex_plugin_co
 python3 -m unittest discover -s tests -v
 ```
 
-Expected: all passing。
+Expected: all passing.
 
 - [ ] **Step 6: commit**
 
@@ -1698,7 +1698,7 @@ git add plugins/codex-reflect/scripts/commands/reflect_skills.py plugins/codex-r
 git commit -m "feat: discover reusable skills from Codex history"
 ```
 
-## Task 12: CapabilityProbe と graceful degradation
+## Task 12: Implement CapabilityProbe and graceful degradation
 
 **Files:**
 - Create: `plugins/codex-reflect/scripts/lib/capabilities.py`
@@ -1706,7 +1706,7 @@ git commit -m "feat: discover reusable skills from Codex history"
 - Modify: `plugins/codex-reflect/scripts/session_start_reminder.py`
 - Modify: `plugins/codex-reflect/scripts/commands/reflect.py`
 
-- [ ] **Step 1: capability tests を書く**
+- [ ] **Step 1: Write capability tests**
 
 ```python
 class TestCapabilities(unittest.TestCase):
@@ -1728,7 +1728,7 @@ class TestCapabilities(unittest.TestCase):
         self.assertTrue(result.realtime_queue_available)
 ```
 
-- [ ] **Step 2: failing tests を確認する**
+- [ ] **Step 2: Confirm the tests fail**
 
 Run:
 
@@ -1736,11 +1736,11 @@ Run:
 python3 -m unittest tests.test_capabilities -v
 ```
 
-Expected: module が存在せず FAIL。
+Expected: FAIL because the module does not exist.
 
-- [ ] **Step 3: dependency-free CapabilityProbe を実装する**
+- [ ] **Step 3: Implement a dependency-free CapabilityProbe**
 
-Python 3.8 でも動くよう `tomllib` に依存せず、`config.toml` の `[history] persistence = "none"` だけを狭い line parser で読む。その他は `codex --version`、session directories、state directory writeability を検査する。
+To support Python 3.8, avoid `tomllib` and use a narrow line parser for only `[history] persistence = "none"` in `config.toml`. Other checks cover `codex --version`, session directories, and state-directory writability.
 
 ```python
 @dataclass
@@ -1752,13 +1752,13 @@ class Capabilities:
     warnings: List[str]
 ```
 
-Hook trust は internal config を推測せず、queue が未作成の場合に `/hooks` を確認する diagnostic message として扱う。
+Do not infer Hook trust from internal configuration. When no queue has been created, provide a diagnostic message that directs the user to `/hooks`.
 
-- [ ] **Step 4: SessionStart と reflect summary に capability を表示する**
+- [ ] **Step 4: Show capabilities in SessionStart and the reflection summary**
 
-history unavailable、unknown transcript、semantic unavailable を別々に表示する。core queue が使える場合は全体 failure と表現しない。unsupported feature から別ログ、SQLite、legacy Skill install へ fallback しない。
+Report unavailable history, unknown transcripts, and unavailable semantic validation separately. When the core queue works, do not describe the entire Plugin as failed. Do not fall back from unsupported features to unrelated logs, SQLite databases, or legacy Skill installation.
 
-- [ ] **Step 5: tests を通す**
+- [ ] **Step 5: Pass the tests**
 
 Run:
 
@@ -1767,7 +1767,7 @@ python3 -m unittest tests.test_capabilities tests.test_integration tests.test_re
 python3 -m unittest discover -s tests -v
 ```
 
-Expected: all passing。
+Expected: all passing.
 
 - [ ] **Step 6: commit**
 
@@ -1776,7 +1776,7 @@ git add plugins/codex-reflect/scripts tests
 git commit -m "feat: report Codex capability gaps safely"
 ```
 
-## Task 13: Claude runtime artifacts を除去し、Codex docs／CI を完成する
+## Task 13: Remove Claude runtime artifacts and complete Codex documentation and CI
 
 **Files:**
 - Delete: `.claude-plugin/`
@@ -1793,7 +1793,7 @@ git commit -m "feat: report Codex capability gaps safely"
 - Modify: `tests/test_integration.py`
 - Modify: `tests/test_codex_plugin_contract.py`
 
-- [ ] **Step 1: Codex-only documentation contract の failing tests を追加する**
+- [ ] **Step 1: Add failing Codex-only documentation contract tests**
 
 ```python
 def test_claude_runtime_manifests_are_removed(self):
@@ -1811,7 +1811,7 @@ def test_readme_documents_attribution_and_codex_gaps(self):
         self.assertIn(text, readme)
 ```
 
-- [ ] **Step 2: contract が旧 artifacts で fail することを確認する**
+- [ ] **Step 2: Confirm the contract fails on obsolete artifacts**
 
 Run:
 
@@ -1819,9 +1819,9 @@ Run:
 python3 -m unittest tests.test_codex_plugin_contract -v
 ```
 
-Expected: `.claude-plugin`／`commands`／root `SKILL.md` が存在して FAIL。
+Expected: FAIL because `.claude-plugin`, `commands`, or the root `SKILL.md` still exists.
 
-- [ ] **Step 3: Claude-only runtime artifacts を削除する**
+- [ ] **Step 3: Remove Claude-only runtime artifacts**
 
 Run:
 
@@ -1831,28 +1831,28 @@ git rm SKILL.md
 git mv CLAUDE.md AGENTS.md
 ```
 
-`AGENTS.md` は Codex Plugin layout、test command、Phase 0／E2E command、MIT attribution を説明する contributor guide に書き換える。Claude Hook schema、`.claude` paths、Claude commands は残さない。
+Rewrite `AGENTS.md` as a contributor guide that explains the Codex Plugin layout, test commands, Phase 0/E2E commands, and MIT attribution. Remove Claude Hook schemas, `.claude` paths, and Claude commands.
 
-- [ ] **Step 4: README と distribution docs を Codex 専用へ書き換える**
+- [ ] **Step 4: Rewrite the README and distribution documentation for Codex only**
 
-README は次を必須 section とする。
+The README must contain these sections:
 
-1. `codex-reflect` の目的
-2. `claude-reflect` fork と MIT attribution
+1. Purpose of `codex-reflect`
+2. `claude-reflect` fork and MIT attribution
 3. marketplace install
-4. Hook trust 手順
-5. 4 fork-named Skills と引数
-6. realtime capture と human review
+4. Hook trust instructions
+5. Four upstream-named Skills and their arguments
+6. Real-time capture and human review
 7. `$CODEX_HOME/codex-reflect` state
-8. semantic subprocess の provider 送信範囲
-9. transcript schema、hosted tool、Memories の capability gaps
-10. macOS／Linux／Windows support
+8. Provider data transfer from the semantic subprocess
+9. Capability gaps involving transcript schemas, hosted tools, and Memories
+10. macOS, Linux, and Windows support
 
-`DISTRIBUTION.md` は Codex marketplace 配布、`RELEASING.md` は manifest version、package tests、Codex E2E、tag 手順へ置換する。`CHANGELOG.md` の過去履歴は保持し、先頭へ `4.0.0-rc.1` の Codex-only breaking change を追加する。
+Rewrite `DISTRIBUTION.md` for Codex marketplace distribution and `RELEASING.md` for manifest versions, package tests, Codex E2E, and tagging. Preserve historical entries in `CHANGELOG.md` and add a `4.0.0-rc.1` Codex-only breaking-change entry at the top.
 
-- [ ] **Step 5: CI path と contract checks を更新する**
+- [ ] **Step 5: Update CI paths and contract checks**
 
-`.github/workflows/test.yml` の Hook smoke path を次へ変更する。
+Change Hook smoke paths in `.github/workflows/test.yml` to:
 
 ```yaml
 - name: Run tests
@@ -1873,9 +1873,9 @@ README は次を必須 section とする。
     echo '{"hook_event_name":"UserPromptSubmit","cwd":".","prompt":"test"}' | python plugins/codex-reflect/scripts/capture_learning.py
 ```
 
-CI matrix は既存の `ubuntu-latest`、`macos-latest`、`windows-latest` と Python 3.8／3.11 を維持する。
+Keep the existing CI matrix of `ubuntu-latest`, `macos-latest`, and `windows-latest` with Python 3.8 and 3.11.
 
-- [ ] **Step 6: Claude runtime dependency scan と full tests を実行する**
+- [ ] **Step 6: Run the Claude runtime dependency scan and full tests**
 
 Run:
 
@@ -1885,7 +1885,7 @@ python3 -m unittest discover -s tests -v
 git diff --check
 ```
 
-Expected: `rg` は no matches で exit 1。attribution／migration explanation を含む docs と、旧 artifact が消えたことを assert する tests はこの runtime scan の対象外とする。tests は all passing、`git diff --check` exit 0。
+Expected: `rg` exits 1 with no matches. Documentation containing attribution or migration explanations and tests asserting the absence of old artifacts are outside this runtime scan. All tests pass and `git diff --check` exits 0.
 
 - [ ] **Step 7: commit**
 
@@ -1894,13 +1894,13 @@ git add -A
 git commit -m "docs: complete Codex-only plugin migration"
 ```
 
-## Task 14: Release gate と local E2E
+## Task 14: Complete the release gate and local E2E
 
 **Files:**
-- Modify only if verification reveals a defect: files owned by Tasks 2〜13
+- Modify only if verification reveals a defect: files owned by Tasks 2 through 13
 - Update test count only after final run: `README.md`
 
-- [ ] **Step 1: fresh automated verification を実行する**
+- [ ] **Step 1: Run fresh automated verification**
 
 Run:
 
@@ -1913,11 +1913,11 @@ python3 -m json.tool plugins/codex-reflect/hooks/hooks.json
 git diff --check
 ```
 
-Expected: すべて exit 0。test count をこの実行結果から README badge に反映する。
+Expected: every command exits 0. Update the README badge with the test count from this run.
 
-- [ ] **Step 2: Plugin install／Hook trust の承認を得る**
+- [ ] **Step 2: Obtain approval for Plugin installation and Hook trust**
 
-local user state を変更するため、次の command 実行前にユーザーへ承認を求める。Phase 0 で install した probe bundle を最新実装へ確実に置換するため、一度 remove してから同じ marketplace から再 install する。
+Ask the user for approval before running these commands because they change local user state. Remove and reinstall from the same marketplace so the probe bundle installed during Phase 0 is definitely replaced by the latest implementation.
 
 ```bash
 codex plugin remove codex-reflect@codex-reflect-marketplace
@@ -1925,19 +1925,19 @@ codex plugin add codex-reflect@codex-reflect-marketplace
 codex plugin list
 ```
 
-Expected: Plugin が installed, enabled。新しい session で `/hooks` に 4 Hook groups が表示される。未 trust なら UI から exact Hook definitions を review／trust する。
+Expected: the Plugin is `installed, enabled`. A new session shows four Hook groups under `/hooks`. If they are not trusted, review and trust the exact Hook definitions in the UI.
 
-- [ ] **Step 3: realtime capture E2E を実行する**
+- [ ] **Step 3: Run real-time capture E2E**
 
-新しい temporary Git repository で Codex を開始し、次を送る。
+Start Codex in a new temporary Git repository and send:
 
 ```text
 remember: always run focused tests before the full suite
 ```
 
-Expected: capture notification が表示され、`$codex-reflect:view-queue` に explicit candidate が 1 件表示される。
+Expected: a capture notification appears and `$codex-reflect:view-queue` shows one explicit candidate.
 
-- [ ] **Step 4: dry-run と apply gate E2E を実行する**
+- [ ] **Step 4: Run dry-run and apply-gate E2E**
 
 Run in Codex:
 
@@ -1945,23 +1945,23 @@ Run in Codex:
 $codex-reflect:reflect --dry-run
 ```
 
-Expected: proposal は表示されるが queue と `AGENTS.md` は変化しない。
+Expected: a proposal appears, but the queue and `AGENTS.md` do not change.
 
-続けて `$codex-reflect:reflect` を実行し、final confirmation 前に cancel して no-write を確認する。その後再実行して approve し、`AGENTS.md` に選択した learning だけが追加されることを確認する。
+Next, run `$codex-reflect:reflect`, cancel before final confirmation, and verify no write occurred. Run it again, approve, and confirm that only the selected learning was added to `AGENTS.md`.
 
-- [ ] **Step 5: history と Skill discovery E2E を実行する**
+- [ ] **Step 5: Run history and Skill-discovery E2E**
 
-`$codex-reflect:reflect --scan-history --days 14` が supported／unsupported session count を表示することを確認する。次に `$codex-reflect:reflect-skills --dry-run --days 14` を実行し、file を生成せず候補または「反復なし」を根拠付きで返すことを確認する。
+Confirm that `$codex-reflect:reflect --scan-history --days 14` displays supported and unsupported session counts. Then run `$codex-reflect:reflect-skills --dry-run --days 14` and confirm it creates no file and returns either an evidence-backed candidate or a reason that no repetition was found.
 
-- [ ] **Step 6: uninstall preservation を確認する**
+- [ ] **Step 6: Verify uninstall preservation**
 
-ユーザー承認後に Plugin を remove し、生成済み `AGENTS.md` と user／repo Skills が残ることを確認する。
+After user approval, remove the Plugin and confirm that generated `AGENTS.md` files and user/repository Skills remain.
 
 ```bash
 codex plugin remove codex-reflect@codex-reflect-marketplace
 ```
 
-- [ ] **Step 7: final status と commit range を確認する**
+- [ ] **Step 7: Check final status and commit range**
 
 Run:
 
@@ -1970,22 +1970,22 @@ git status --short --branch
 git log --oneline --decorate --max-count=15
 ```
 
-Expected: intended commits だけがあり、worktree clean。E2E で defect を修正した場合は focused regression test を追加してから、その component の commit message で追加 commit する。
+Expected: only intended commits are present and the worktree is clean. If E2E required a defect fix, add a focused regression test and make an additional commit named for that component.
 
 ## Spec coverage checklist
 
 | Spec requirement | Plan task |
 |---|---|
-| Codex Plugin／4 fork-named Skills | Tasks 2, 9, 10, 11 |
-| realtime capture／lifecycle | Tasks 4, 5 |
+| Codex Plugin and four upstream-named Skills | Tasks 2, 9, 10, 11 |
+| real-time capture and lifecycle | Tasks 4, 5 |
 | `$CODEX_HOME/codex-reflect` state | Task 3 |
-| `AGENTS.md`／Skills routing | Task 6 |
-| active／archived history | Task 7 |
+| `AGENTS.md` and Skills routing | Task 6 |
+| active and archived history | Task 7 |
 | `codex exec` semantic validation | Task 8 |
-| human review／final confirmation | Tasks 9, 10, 11 |
-| tool errors／rejections | Task 7, Task 10 |
-| capability gaps／no large workaround | Tasks 2, 12, 14 |
-| privacy／redaction | Tasks 7, 8, 13 |
-| macOS／Linux／Windows | Tasks 3, 13, 14 |
-| MIT attribution／Codex-only docs | Task 13 |
-| release gates／E2E | Task 14 |
+| human review and final confirmation | Tasks 9, 10, 11 |
+| tool errors and rejections | Task 7, Task 10 |
+| capability gaps and no large workaround | Tasks 2, 12, 14 |
+| privacy and redaction | Tasks 7, 8, 13 |
+| macOS, Linux, and Windows | Tasks 3, 13, 14 |
+| MIT attribution and Codex-only documentation | Task 13 |
+| release gates and E2E | Task 14 |
