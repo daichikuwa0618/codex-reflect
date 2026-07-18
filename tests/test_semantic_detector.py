@@ -12,7 +12,10 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 # Add scripts directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+REPO_ROOT = Path(__file__).resolve().parent.parent
+PLUGIN_ROOT = REPO_ROOT / "plugins" / "codex-reflect"
+SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
 
 from lib.semantic_detector import (
     semantic_analyze,

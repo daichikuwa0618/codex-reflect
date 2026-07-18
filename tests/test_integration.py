@@ -17,7 +17,10 @@ IS_WINDOWS = sys.platform == 'win32'
 skip_on_windows = unittest.skipIf(IS_WINDOWS, "Bash scripts not available on Windows")
 
 # Script locations
-SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+PLUGIN_ROOT = REPO_ROOT / "plugins" / "codex-reflect"
+SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
 BASH_SCRIPTS = {
     "check_learnings": SCRIPTS_DIR / "legacy" / "check-learnings.sh",
     "post_commit_reminder": SCRIPTS_DIR / "legacy" / "post-commit-reminder.sh",
