@@ -457,7 +457,22 @@ class TestPostCommitReminder(CodexLifecycleHookTestCase):
             "Git commit detected", response["systemMessage"]
         )
 
-    def test_does_not_fall_back_when_cmd_is_present(self):
+    def test_falls_back_to_command_when_cmd_has_no_value(self):
+        for cmd in (None, "", []):
+            with self.subTest(cmd=cmd):
+                stdout, stderr, code = self.run_post_tool_use({
+                    "cmd": cmd,
+                    "command": "git commit -m test",
+                })
+                self.assertEqual(code, 0)
+                self.assertEqual(stderr, "")
+                self.assertNotEqual(stdout, "")
+                self.assertIn(
+                    "Git commit detected",
+                    json.loads(stdout)["systemMessage"],
+                )
+
+    def test_nonempty_valid_cmd_takes_priority_over_command(self):
         result = self.run_post_tool_use({
             "cmd": "ls",
             "command": "git commit -m test",
@@ -477,7 +492,10 @@ class TestPostCommitReminder(CodexLifecycleHookTestCase):
         for cmd in (123, {"value": "git commit"}, ["git", 123, "commit"]):
             with self.subTest(cmd=cmd):
                 self.assertEqual(
-                    self.run_post_tool_use({"cmd": cmd}),
+                    self.run_post_tool_use({
+                        "cmd": cmd,
+                        "command": "git commit -m test",
+                    }),
                     ("", "", 0),
                 )
 

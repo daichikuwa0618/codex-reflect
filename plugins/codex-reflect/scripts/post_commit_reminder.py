@@ -16,12 +16,7 @@ def _valid_cwd(data):
     return isinstance(cwd, str) and bool(cwd) and os.path.isabs(cwd)
 
 
-def _command_from(tool_input):
-    value = (
-        tool_input["cmd"]
-        if "cmd" in tool_input
-        else tool_input.get("command")
-    )
+def _normalize_command(value):
     if isinstance(value, str):
         return value
     if isinstance(value, list) and all(
@@ -29,6 +24,16 @@ def _command_from(tool_input):
     ):
         return " ".join(value)
     return ""
+
+
+def _command_from(tool_input):
+    if "cmd" not in tool_input:
+        return _normalize_command(tool_input.get("command"))
+
+    value = tool_input["cmd"]
+    if value is None or value == "" or value == []:
+        return _normalize_command(tool_input.get("command"))
+    return _normalize_command(value)
 
 
 def main() -> int:
