@@ -13,7 +13,7 @@ FIXTURES = REPO_ROOT / "tests" / "fixtures" / "codex"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from lib.codex_history import list_session_files, parse_transcript, read_jsonl
-from lib.redaction import redact_secrets
+from lib.redaction import redact_secrets, redact_structure
 
 
 class TestCodexHistory(unittest.TestCase):
@@ -343,6 +343,27 @@ class TestCodexHistory(unittest.TestCase):
             self.assertNotIn(secret, combined)
         self.assertIn('"monkey": "banana"', combined)
 
+    def test_end_to_end_redacts_double_escaped_json_and_basic_authorization(self):
+        result = self._parse_records([
+            {"type": "session_meta", "payload": {"id": "s1"}},
+            {"type": "turn_context", "payload": {}},
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "output": (
+                        r'{\\"token\\":\\"double-escaped-secret\\"} '
+                        "Authorization: Basic dXNlcjpwYXNz"
+                    ),
+                },
+            },
+        ])
+
+        output = result.tool_outputs[0]
+        self.assertNotIn("double-escaped-secret", output)
+        self.assertNotIn("dXNlcjpwYXNz", output)
+        self.assertEqual(output.count("[REDACTED]"), 2)
+
     def test_invalid_jsonl_reports_line_number(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "broken.jsonl"
@@ -538,6 +559,50 @@ class TestSecretRedaction(unittest.TestCase):
 
         self.assertEqual(redacted, r'{\"token\":\"[REDACTED]\"}')
         self.assertNotIn("suffix-secret", redacted)
+
+    def test_redacts_double_backslash_quoted_json_assignment(self):
+        value = r'{\\"token\\":\\"double-escaped-secret\\"}'
+
+        self.assertEqual(
+            redact_secrets(value),
+            r'{\\"token\\":\\"[REDACTED]\\"}',
+        )
+
+    def test_redacts_non_bearer_authorization_credential(self):
+        redacted = redact_secrets("Authorization: Basic dXNlcjpwYXNz")
+
+        self.assertNotIn("dXNlcjpwYXNz", redacted)
+        self.assertEqual(redacted, "Authorization: Basic [REDACTED]")
+
+    def test_generic_keys_are_not_treated_as_secrets(self):
+        self.assertEqual(
+            redact_secrets(
+                "cache_key=users public_key=ssh-ed25519 key=Enter"
+            ),
+            "cache_key=users public_key=ssh-ed25519 key=Enter",
+        )
+        self.assertEqual(
+            redact_structure({
+                "cache_key": "users",
+                "public_key": "ssh-ed25519",
+                "key": "Enter",
+            }),
+            {
+                "cache_key": "users",
+                "public_key": "ssh-ed25519",
+                "key": "Enter",
+            },
+        )
+
+    def test_qualified_key_names_are_still_redacted(self):
+        for name in ("API_KEY", "private_key", "access_key"):
+            with self.subTest(name=name):
+                value = "{}=secret-value".format(name)
+                self.assertNotIn("secret-value", redact_secrets(value))
+                self.assertEqual(
+                    redact_structure({name: "secret-value"})[name],
+                    "[REDACTED]",
+                )
 
     def test_does_not_redact_non_secret_assignments(self):
         self.assertEqual(redact_secrets("COUNT=3 MODE=test"), "COUNT=3 MODE=test")

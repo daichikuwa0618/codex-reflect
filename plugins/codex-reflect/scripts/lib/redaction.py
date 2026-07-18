@@ -7,16 +7,24 @@ _SECRET_COMPONENTS = {
     "authorization",
     "cookie",
     "credential",
-    "key",
     "passwd",
     "password",
     "secret",
     "token",
 }
+_SECRET_KEY_QUALIFIERS = {
+    "access",
+    "api",
+    "auth",
+    "authorization",
+    "credential",
+    "private",
+    "secret",
+}
 _IDENTIFIER = r"[A-Za-z][A-Za-z0-9_-]*"
 _ASSIGNMENT_START_PATTERN = re.compile(
     r"(?:"
-    r"(?P<escaped_quote>\\[\"'])(?P<escaped_key>{identifier})"
+    r"(?P<escaped_quote>\\+[\"'])(?P<escaped_key>{identifier})"
     r"(?P=escaped_quote)"
     r"|(?P<quote>[\"'])(?P<quoted_key>{identifier})(?P=quote)"
     r"|(?P<bare_key>(?<![A-Za-z0-9_-]){identifier})"
@@ -61,9 +69,15 @@ def _identifier_components(value: str):
 
 
 def _is_secret_key(value: str) -> bool:
-    return any(
+    components = _identifier_components(value)
+    if any(
         component in _SECRET_COMPONENTS
-        for component in _identifier_components(value)
+        for component in components
+    ):
+        return True
+    return "key" in components and any(
+        component in _SECRET_KEY_QUALIFIERS
+        for component in components
     )
 
 
@@ -88,6 +102,7 @@ def _redact_assignments(value: str) -> str:
             value,
             match.end(),
             match.group("separator"),
+            key,
         )
         if replacement is None:
             search_position = match.end()
@@ -103,13 +118,18 @@ def _redact_assignments(value: str) -> str:
     return "".join(pieces)
 
 
-def _consume_assignment_value(value: str, start: int, separator: str):
+def _consume_assignment_value(
+    value: str,
+    start: int,
+    separator: str,
+    key: str,
+):
     if start >= len(value) or value[start] in "\r\n":
         return start, None
 
-    if value.startswith(('\\"', "\\'"), start):
-        delimiter = value[start:start + 2]
-        end = _backslash_quoted_end(value, start)
+    delimiter = _backslash_quote_delimiter(value, start)
+    if delimiter is not None:
+        end = _backslash_quoted_end(value, start, delimiter)
         if end is None:
             return _line_end(value, start), delimiter + "[REDACTED]"
         return end, delimiter + "[REDACTED]" + delimiter
@@ -129,6 +149,17 @@ def _consume_assignment_value(value: str, start: int, separator: str):
             position += 1
         return _line_end(value, start), quote + "[REDACTED]"
 
+    if "authorization" in _identifier_components(key):
+        end = _line_end(value, start)
+        scheme = re.match(
+            r"([A-Za-z][A-Za-z0-9_-]*)[ \t]+(?=\S)",
+            value[start:end],
+        )
+        replacement = "[REDACTED]"
+        if separator == ":" and scheme is not None:
+            replacement = scheme.group(1) + " [REDACTED]"
+        return end, replacement
+
     bearer = re.match(
         r"(?i)Bearer\s+[^\s,;}}\]\"']+", value[start:]
     )
@@ -147,9 +178,21 @@ def _consume_assignment_value(value: str, start: int, separator: str):
     return end, "[REDACTED]"
 
 
-def _backslash_quoted_end(value: str, start: int):
-    quote = value[start + 1]
-    position = start + 2
+def _backslash_quote_delimiter(value: str, start: int):
+    position = start
+    while position < len(value) and value[position] == "\\":
+        position += 1
+    if position == start or position >= len(value):
+        return None
+    if value[position] not in ("\"", "'"):
+        return None
+    return value[start:position + 1]
+
+
+def _backslash_quoted_end(value: str, start: int, delimiter: str):
+    quote = delimiter[-1]
+    delimiter_backslashes = len(delimiter) - 1
+    position = start + len(delimiter)
     while position < len(value):
         if value[position] in "\r\n":
             return None
@@ -162,7 +205,7 @@ def _backslash_quoted_end(value: str, start: int):
         while before_quote >= start and value[before_quote] == "\\":
             backslashes += 1
             before_quote -= 1
-        if backslashes % 4 == 1:
+        if backslashes == delimiter_backslashes:
             return position + 1
         position += 1
     return None
