@@ -2,12 +2,14 @@
 """Tests for locked, atomic project queue storage."""
 import json
 import os
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -37,6 +39,49 @@ class TestStateStore(unittest.TestCase):
                     lock.__enter__()
 
             self.assertFalse(lock.thread_lock.locked())
+
+    def test_enter_releases_thread_lock_when_handle_close_fails(self):
+        with tempfile.TemporaryDirectory() as root:
+            lock = FileLock(Path(root) / "queue.json.lock")
+            handle = MagicMock()
+            handle.tell.return_value = 0
+            handle.write.side_effect = OSError("setup failed")
+            handle.close.side_effect = OSError("close failed")
+            locked_after_failure = None
+
+            try:
+                with patch.object(Path, "open", return_value=handle):
+                    with self.assertRaisesRegex(OSError, "close failed"):
+                        lock.__enter__()
+                locked_after_failure = lock.thread_lock.locked()
+            finally:
+                if lock.thread_lock.locked():
+                    lock.thread_lock.release()
+
+            self.assertFalse(locked_after_failure)
+
+    def test_exit_releases_thread_lock_when_handle_close_fails(self):
+        with tempfile.TemporaryDirectory() as root:
+            lock = FileLock(Path(root) / "queue.json.lock")
+            lock.__enter__()
+            real_handle = lock.handle
+            failing_handle = MagicMock()
+            failing_handle.seek.side_effect = real_handle.seek
+            failing_handle.fileno.side_effect = real_handle.fileno
+            failing_handle.close.side_effect = OSError("close failed")
+            lock.handle = failing_handle
+            locked_after_failure = None
+
+            try:
+                with self.assertRaisesRegex(OSError, "close failed"):
+                    lock.__exit__(None, None, None)
+                locked_after_failure = lock.thread_lock.locked()
+            finally:
+                if lock.thread_lock.locked():
+                    lock.thread_lock.release()
+                real_handle.close()
+
+            self.assertFalse(locked_after_failure)
 
     def test_append_round_trips_atomically(self):
         with tempfile.TemporaryDirectory() as root:
@@ -92,6 +137,16 @@ class TestStateStore(unittest.TestCase):
                 StateStore(Path(root)).load()
             self.assertEqual(queue.read_text(encoding="utf-8"), "{broken")
 
+    def test_invalid_utf8_queue_is_reported_and_preserved(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue = Path(root) / "queue.json"
+            original = b'[{"id":"one"},\xff]'
+            queue.write_bytes(original)
+
+            with self.assertRaises(CorruptQueueError):
+                StateStore(Path(root)).load()
+            self.assertEqual(queue.read_bytes(), original)
+
     def test_malformed_queue_is_not_overwritten_by_mutations(self):
         with tempfile.TemporaryDirectory() as root:
             queue = Path(root) / "queue.json"
@@ -130,6 +185,70 @@ class TestStateStore(unittest.TestCase):
             self.assertEqual(
                 {item["id"] for item in items},
                 {str(index) for index in range(32)},
+            )
+
+    def test_separate_process_appends_do_not_lose_items(self):
+        worker = """
+import sys
+import time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from lib.state_store import StateStore
+
+root = Path(sys.argv[2])
+prefix = sys.argv[3]
+root.mkdir(parents=True, exist_ok=True)
+(root / f"ready-{prefix}").touch()
+while not (root / "start").exists():
+    time.sleep(0.001)
+for index in range(int(sys.argv[4])):
+    StateStore(root).append({"id": f"{prefix}-{index}"})
+"""
+        with tempfile.TemporaryDirectory() as root:
+            processes = [
+                subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-c",
+                        worker,
+                        str(SCRIPTS_DIR),
+                        root,
+                        str(process),
+                        "8",
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                for process in range(4)
+            ]
+            try:
+                deadline = time.monotonic() + 10
+                ready_files = [
+                    Path(root) / f"ready-{process}" for process in range(4)
+                ]
+                while not all(path.exists() for path in ready_files):
+                    if time.monotonic() >= deadline:
+                        self.fail("worker processes did not become ready")
+                    time.sleep(0.01)
+                (Path(root) / "start").touch()
+                for process in processes:
+                    stdout, stderr = process.communicate(timeout=30)
+                    self.assertEqual(process.returncode, 0, stdout + stderr)
+            finally:
+                for process in processes:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+
+            items = StateStore(Path(root)).load()
+            self.assertEqual(
+                {item["id"] for item in items},
+                {
+                    f"{process}-{index}"
+                    for process in range(4)
+                    for index in range(8)
+                },
             )
 
 

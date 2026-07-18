@@ -1,6 +1,7 @@
 """Stable paths for codex-reflect state shared by Hooks and Skills."""
 import hashlib
 import os
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -14,8 +15,19 @@ def get_codex_home() -> Path:
 
 
 def normalize_project_path(project_dir: Optional[str] = None) -> str:
-    """Return a platform-normalized absolute project path."""
+    """Return a normalized repository root, or directory outside Git."""
     path = Path(project_dir or os.getcwd()).expanduser().resolve()
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        result = None
+    if result is not None and result.returncode == 0 and result.stdout.strip():
+        path = Path(result.stdout.strip()).expanduser().resolve()
     normalized = os.path.normcase(os.path.normpath(str(path)))
     return normalized.replace("\\", "/")
 

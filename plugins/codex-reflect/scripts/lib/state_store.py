@@ -49,10 +49,12 @@ class FileLock:
                 fcntl.lockf(
                     self.handle.fileno(), fcntl.LOCK_EX, 1, 0, os.SEEK_SET
                 )
-        except Exception:
-            if self.handle is not None:
-                self.handle.close()
-            self.thread_lock.release()
+        except BaseException:
+            try:
+                if self.handle is not None:
+                    self.handle.close()
+            finally:
+                self.thread_lock.release()
             raise
         return self
 
@@ -70,8 +72,10 @@ class FileLock:
                     self.handle.fileno(), fcntl.LOCK_UN, 1, 0, os.SEEK_SET
                 )
         finally:
-            self.handle.close()
-            self.thread_lock.release()
+            try:
+                self.handle.close()
+            finally:
+                self.thread_lock.release()
 
 
 class StateStore:
@@ -87,7 +91,7 @@ class StateStore:
             return []
         try:
             value = json.loads(self.queue_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as error:
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as error:
             raise CorruptQueueError(str(error)) from error
         if not isinstance(value, list):
             raise CorruptQueueError("queue root must be a JSON array")
