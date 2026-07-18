@@ -1,4 +1,6 @@
 """Read-only resolution of Codex instruction and Skill authoring targets."""
+import os
+import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -93,7 +95,22 @@ class TargetResolver:
         del learning
         cwd = Path(cwd).expanduser().resolve()
         active = self.active_instruction_file(cwd)
-        return active if active is not None else cwd / "AGENTS.md"
+        if active is not None:
+            return active
+
+        root = self.repository_root(cwd)
+        try:
+            cwd.relative_to(root)
+        except ValueError:
+            return cwd / "AGENTS.md"
+
+        directory = cwd
+        while directory != root:
+            directory = directory.parent
+            active = self.active_instruction_file(directory)
+            if active is not None:
+                return active
+        return cwd / "AGENTS.md"
 
     def suggest_skill_root(self, source_projects: Iterable[str], repo_root) -> Path:
         if len(set(source_projects)) > 1:
@@ -104,14 +121,28 @@ class TargetResolver:
     def _is_within(path: Path, root: Path) -> bool:
         return path == root or root in path.parents
 
+    @staticmethod
+    def _is_writable_regular_file(path: Path) -> bool:
+        try:
+            mode = path.stat().st_mode
+        except OSError:
+            return False
+        write_bits = stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
+        return (
+            stat.S_ISREG(mode)
+            and bool(mode & write_bits)
+            and os.access(path, os.W_OK)
+        )
+
     def suggest_skill_target(self, skill_path, repo_root) -> TargetSuggestion:
         skill_path = Path(skill_path).expanduser().resolve()
         writable_roots = (
             self.user_skill_root().resolve(),
             self.repo_skill_root(repo_root).resolve(),
         )
-        read_only = not any(
-            self._is_within(skill_path, root) for root in writable_roots
+        read_only = not (
+            any(self._is_within(skill_path, root) for root in writable_roots)
+            and self._is_writable_regular_file(skill_path)
         )
         return TargetSuggestion("skill", skill_path, read_only=read_only)
 

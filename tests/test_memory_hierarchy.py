@@ -73,6 +73,7 @@ class TestAgentsHierarchy(ResolverTestCase):
 class TestSkillRouting(ResolverTestCase):
     def test_repo_authoring_skill_is_writable(self):
         skill = self.repo / ".agents" / "skills" / "test-runner" / "SKILL.md"
+        self.write(skill, "# Test runner")
 
         suggestion = self.resolver.suggest_target(
             "skill", cwd=self.nested, skill_path=skill
@@ -82,6 +83,7 @@ class TestSkillRouting(ResolverTestCase):
 
     def test_user_authoring_skill_is_writable(self):
         skill = self.home / ".agents" / "skills" / "test-runner" / "SKILL.md"
+        self.write(skill, "# Test runner")
 
         suggestion = self.resolver.suggest_target(
             "skill", cwd=self.nested, skill_path=skill
@@ -102,6 +104,42 @@ class TestSkillRouting(ResolverTestCase):
 
 
 class TestReadOnlyPluginSkill(ResolverTestCase):
+    def test_missing_repo_authoring_skill_is_suggested_read_only(self):
+        skill = self.repo / ".agents" / "skills" / "missing" / "SKILL.md"
+
+        suggestion = self.resolver.suggest_target(
+            "skill", cwd=self.nested, skill_path=skill
+        )
+
+        self.assertEqual(suggestion.path, skill.resolve())
+        self.assertTrue(suggestion.read_only)
+
+    def test_directory_at_repo_authoring_path_is_suggested_read_only(self):
+        skill = self.repo / ".agents" / "skills" / "directory" / "SKILL.md"
+        skill.mkdir(parents=True)
+
+        suggestion = self.resolver.suggest_target(
+            "skill", cwd=self.nested, skill_path=skill
+        )
+
+        self.assertEqual(suggestion.path, skill.resolve())
+        self.assertTrue(suggestion.read_only)
+
+    def test_nonwritable_repo_authoring_skill_is_suggested_read_only(self):
+        skill = self.repo / ".agents" / "skills" / "locked" / "SKILL.md"
+        self.write(skill, "# Locked")
+        original_mode = skill.stat().st_mode
+        skill.chmod(0o444)
+        try:
+            suggestion = self.resolver.suggest_target(
+                "skill", cwd=self.nested, skill_path=skill
+            )
+        finally:
+            skill.chmod(original_mode)
+
+        self.assertEqual(suggestion.path, skill.resolve())
+        self.assertTrue(suggestion.read_only)
+
     def test_plugin_cache_skill_is_suggested_read_only(self):
         skill = (
             self.codex_home

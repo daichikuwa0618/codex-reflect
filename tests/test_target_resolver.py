@@ -101,7 +101,35 @@ class TestTargetResolver(unittest.TestCase):
 
         self.assertEqual(target, self.cwd / "AGENTS.override.md")
 
-    def test_path_specific_learning_proposes_regular_file_without_active_file(self):
+    def test_path_specific_learning_prefers_nearest_parent_agents(self):
+        self.write(self.repo / "src" / "AGENTS.md", "src")
+
+        target = self.resolver.suggest_instruction_target(
+            "In src/payments, always run make test-payments", self.cwd
+        )
+
+        self.assertEqual(target, self.repo / "src" / "AGENTS.md")
+
+    def test_path_specific_learning_prefers_nearest_parent_override(self):
+        self.write(self.repo / "src" / "AGENTS.md", "src")
+        self.write(self.repo / "src" / "AGENTS.override.md", "src override")
+
+        target = self.resolver.suggest_instruction_target(
+            "In src/payments, always run make test-payments", self.cwd
+        )
+
+        self.assertEqual(target, self.repo / "src" / "AGENTS.override.md")
+
+    def test_path_specific_learning_falls_back_to_active_repo_root(self):
+        self.write(self.repo / "AGENTS.md", "root")
+
+        target = self.resolver.suggest_instruction_target(
+            "In src/payments, always run make test-payments", self.cwd
+        )
+
+        self.assertEqual(target, self.repo / "AGENTS.md")
+
+    def test_path_specific_learning_proposes_regular_file_without_active_ancestor(self):
         target = self.resolver.suggest_instruction_target(
             "In src/payments, always run make test-payments", self.cwd
         )
@@ -109,6 +137,16 @@ class TestTargetResolver(unittest.TestCase):
         self.assertEqual(target, self.cwd / "AGENTS.md")
         self.assertFalse((self.cwd / "AGENTS.md").exists())
         self.assertFalse((self.cwd / "AGENTS.override.md").exists())
+
+    def test_non_repository_suggestion_does_not_walk_parent_directories(self):
+        parent = Path(self.temp_dir.name).resolve() / "not-a-repo"
+        cwd = parent / "nested"
+        cwd.mkdir(parents=True)
+        self.write(parent / "AGENTS.md", "parent")
+
+        target = self.resolver.suggest_instruction_target("local", cwd)
+
+        self.assertEqual(target, cwd / "AGENTS.md")
 
     def test_cross_project_skill_prefers_user_scope(self):
         target = self.resolver.suggest_skill_root({"repo-a", "repo-b"}, self.repo)
