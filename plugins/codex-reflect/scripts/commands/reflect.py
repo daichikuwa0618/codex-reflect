@@ -12,10 +12,18 @@ from typing import List, Optional
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from lib.codex_history import list_session_files, parse_transcript
+from lib.codex_history import (
+    list_session_files,
+    parse_transcript,
+    read_transcript_metadata,
+)
 from lib.capabilities import Capabilities, probe_capabilities
 from lib.codex_paths import get_codex_home, get_project_id
-from lib.reflect_utils import detect_patterns, extract_tool_errors
+from lib.reflect_utils import (
+    detect_patterns,
+    extract_tool_errors,
+    should_include_message,
+)
 from lib.semantic_detector import detect_contradictions, semantic_analyze
 from lib.state_store import StateStore
 from lib.target_resolver import TargetResolver, TargetSuggestion
@@ -172,6 +180,35 @@ def _scan_history(
         else None
     )
     for session_file in files:
+        try:
+            metadata = read_transcript_metadata(session_file)
+        except (OSError, ValueError, RuntimeError) as error:
+            history_summary["unsupported_sessions"] += 1
+            history_summary["issues"].append(
+                "{}: {}".format(session_file, type(error).__name__)
+            )
+            continue
+        if metadata is None and cutoff is not None:
+            history_summary["unsupported_sessions"] += 1
+            history_summary["issues"].append(
+                "{}: unsupported transcript schema".format(session_file)
+            )
+            continue
+        if metadata is not None:
+            timestamp = _parse_timestamp(metadata.timestamp)
+            if cutoff is not None:
+                if timestamp is None:
+                    history_summary["issues"].append(
+                        "{}: missing timestamp for --days filter".format(
+                            session_file
+                        )
+                    )
+                    continue
+                if timestamp < cutoff:
+                    continue
+            if not _same_project(resolver, metadata.cwd, project):
+                continue
+
         history_summary["scanned"] += 1
         try:
             transcript = parse_transcript(session_file)
@@ -205,6 +242,8 @@ def _scan_history(
         if not _same_project(resolver, transcript.cwd, project):
             continue
         for index, message in enumerate(transcript.user_messages, start=1):
+            if not should_include_message(message):
+                continue
             item = _history_item(message, transcript, index, project)
             if item is not None:
                 candidates.append(item)

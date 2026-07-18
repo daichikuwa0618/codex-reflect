@@ -172,6 +172,132 @@ class TestReflectCommand(unittest.TestCase):
             for issue in result["history"]["issues"]
         ))
 
+    @patch("commands.reflect.semantic_analyze", return_value=None)
+    def test_scope_filters_transcripts_before_full_parsing(self, _semantic):
+        def write_session(name, cwd, timestamp, message, unknown=False):
+            path = Path(self.temp_dir.name) / name
+            records = [
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": name,
+                        "cwd": str(cwd),
+                        "timestamp": timestamp,
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": message},
+                },
+            ]
+            if unknown:
+                records.extend(
+                    {"type": "future_record", "payload": {}}
+                    for _ in range(3)
+                )
+            path.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            return path
+
+        current = write_session(
+            "current.jsonl",
+            self.project,
+            "2099-07-18T00:00:00Z",
+            "remember: keep this project-scoped learning",
+        )
+        old = write_session(
+            "old.jsonl",
+            self.project,
+            "2000-01-01T00:00:00Z",
+            "remember: do not read this old learning",
+            unknown=True,
+        )
+        other = write_session(
+            "other.jsonl",
+            Path(self.temp_dir.name) / "other-repo",
+            "2099-07-18T00:00:00Z",
+            "remember: do not read this other-project learning",
+            unknown=True,
+        )
+        context = ReflectionContext(
+            project=self.project,
+            codex_home=self.codex_home,
+            session_files=[current, old, other],
+            capabilities=self.context.capabilities,
+        )
+
+        result = prepare_reflection(context, scan_history=True, days=30)
+
+        history_candidates = [
+            candidate
+            for candidate in result["candidates"]
+            if candidate.get("source") == "history"
+        ]
+        self.assertEqual(result["history"]["scanned"], 1)
+        self.assertEqual(len(history_candidates), 1)
+        self.assertEqual(
+            history_candidates[0]["message"],
+            "remember: keep this project-scoped learning",
+        )
+        self.assertFalse(any(
+            "future_record" in issue for issue in result["history"]["issues"]
+        ))
+
+    @patch("commands.reflect.semantic_analyze", return_value=None)
+    def test_history_scan_filters_app_injected_context(self, _semantic):
+        transcript = Path(self.temp_dir.name) / "injected-context.jsonl"
+        records = [
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": "injected-context",
+                    "cwd": str(self.project),
+                    "timestamp": "2099-07-18T00:00:00Z",
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": (
+                        "# AGENTS.md instructions for /repo\n\n"
+                        "remember: do not treat this as user feedback"
+                    ),
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": "remember: keep this actual user feedback",
+                },
+            },
+        ]
+        transcript.write_text(
+            "".join(json.dumps(record) + "\n" for record in records),
+            encoding="utf-8",
+        )
+        context = ReflectionContext(
+            project=self.project,
+            codex_home=self.codex_home,
+            session_files=[transcript],
+            capabilities=self.context.capabilities,
+        )
+
+        result = prepare_reflection(context, scan_history=True, days=30)
+
+        history_messages = [
+            candidate["message"]
+            for candidate in result["candidates"]
+            if candidate.get("source") == "history"
+        ]
+        self.assertEqual(
+            history_messages,
+            ["remember: keep this actual user feedback"],
+        )
+
     @patch("commands.reflect.semantic_analyze")
     @patch("commands.reflect.probe_capabilities")
     def test_missing_codex_cli_keeps_candidates_without_semantic_calls(

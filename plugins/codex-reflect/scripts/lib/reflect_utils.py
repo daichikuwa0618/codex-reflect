@@ -389,6 +389,7 @@ def should_include_message(text: str) -> bool:
         r"<task-notification>",
         r"<system-reminder>",
         r"This session is being continued",
+        r"^# AGENTS\.md instructions(?:\s+for\b|[\r\n]|$)",
         r"^Analysis:",
         r"^\*\*",           # Bold text
         r"^   -",           # Indented lists

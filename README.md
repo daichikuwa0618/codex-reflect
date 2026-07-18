@@ -2,7 +2,7 @@
 
 [![Version](https://img.shields.io/badge/version-4.0.0--rc.1-blue?style=flat-square)](plugins/codex-reflect/.codex-plugin/plugin.json)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-346%20passing-brightgreen?style=flat-square)](.github/workflows/test.yml)
+[![Tests](https://img.shields.io/badge/tests-351%20passing-brightgreen?style=flat-square)](.github/workflows/test.yml)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square)](.github/workflows/test.yml)
 
 A Codex Plugin that captures corrections, positive feedback, and explicit memory instructions in a queue, then applies them to `AGENTS.md` or reusable Codex Skills after human review. It can also discover repeated workflows in session history.

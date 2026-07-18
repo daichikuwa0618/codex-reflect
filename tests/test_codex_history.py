@@ -185,6 +185,23 @@ class TestCodexHistory(unittest.TestCase):
         self.assertEqual(result.user_messages, ["first"])
         self.assertIn("ignored unknown record type: future_record", result.issues)
 
+    def test_unknown_record_issues_are_deduplicated_by_type(self):
+        result = self._parse_records([
+            {"type": "session_meta", "payload": {"id": "s1"}},
+            {"type": "turn_context", "payload": {}},
+            {"type": "future_record", "payload": {}},
+            {"type": "future_record", "payload": {}},
+            {"type": "another_record", "payload": {}},
+        ])
+
+        self.assertEqual(
+            result.issues,
+            [
+                "ignored unknown record type: another_record",
+                "ignored unknown record type: future_record",
+            ],
+        )
+
     def test_response_item_requires_user_role_and_input_text_shape(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "roles.jsonl"

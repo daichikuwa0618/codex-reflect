@@ -12,8 +12,13 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from lib.codex_history import list_session_files, parse_transcript
+from lib.codex_history import (
+    list_session_files,
+    parse_transcript,
+    read_transcript_metadata,
+)
 from lib.codex_paths import get_codex_home
+from lib.reflect_utils import should_include_message
 from lib.target_resolver import TargetResolver
 
 
@@ -135,6 +140,31 @@ def collect_discovery_input(
 
     for path in list_session_files(context.codex_home):
         try:
+            metadata = read_transcript_metadata(path)
+        except (OSError, ValueError, RuntimeError) as error:
+            unsupported += 1
+            issues.append("{}: {}".format(path, type(error).__name__))
+            continue
+        if metadata is None:
+            unsupported += 1
+            issues.append("{}: unsupported transcript schema".format(path))
+            continue
+        timestamp = _parse_timestamp(metadata.timestamp)
+        if timestamp is None:
+            unsupported += 1
+            issues.append("{}: missing or invalid timestamp".format(path))
+            continue
+        if timestamp < cutoff:
+            continue
+        if not metadata.cwd:
+            unsupported += 1
+            issues.append("{}: missing project cwd".format(path))
+            continue
+        transcript_project = resolver.repository_root(metadata.cwd)
+        if not all_projects and transcript_project != selected_project:
+            continue
+
+        try:
             transcript = parse_transcript(path)
         except (OSError, ValueError, RuntimeError) as error:
             unsupported += 1
@@ -147,26 +177,16 @@ def collect_discovery_input(
                 for issue in transcript.issues
             )
             continue
-        timestamp = _parse_timestamp(transcript.timestamp)
-        if timestamp is None:
-            unsupported += 1
-            issues.append("{}: missing or invalid timestamp".format(path))
-            continue
-        if timestamp < cutoff:
-            continue
-        if not transcript.cwd:
-            unsupported += 1
-            issues.append("{}: missing project cwd".format(path))
-            continue
-        transcript_project = resolver.repository_root(transcript.cwd)
-        if not all_projects and transcript_project != selected_project:
-            continue
         projects.add(str(transcript_project))
         sessions.append({
             "session_id": transcript.session_id,
             "project": str(transcript_project),
             "timestamp": transcript.timestamp,
-            "messages": transcript.user_messages,
+            "messages": [
+                message
+                for message in transcript.user_messages
+                if should_include_message(message)
+            ],
             "source": str(path),
         })
         issues.extend(

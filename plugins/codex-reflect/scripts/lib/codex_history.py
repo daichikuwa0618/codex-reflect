@@ -29,6 +29,13 @@ class TranscriptResult:
     issues: List[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class TranscriptMetadata:
+    session_id: str = ""
+    cwd: str = ""
+    timestamp: str = ""
+
+
 def read_jsonl(path: Path) -> List[Dict[str, Any]]:
     """Read object records from JSONL and report malformed line numbers."""
     records = []
@@ -48,6 +55,32 @@ def read_jsonl(path: Path) -> List[Dict[str, Any]]:
                 )
             records.append(value)
     return records
+
+
+def read_transcript_metadata(path: Path) -> Optional[TranscriptMetadata]:
+    """Read only as far as the first confirmed Codex session metadata record."""
+    with Path(path).open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    "invalid JSONL at line {}: {}".format(line_number, error)
+                ) from error
+            if not isinstance(record, dict):
+                raise ValueError(
+                    "record at line {} must be an object".format(line_number)
+                )
+            payload = record.get("payload")
+            if record.get("type") == "session_meta" and isinstance(payload, dict):
+                return TranscriptMetadata(
+                    session_id=_metadata_value(payload, "id"),
+                    cwd=_metadata_value(payload, "cwd"),
+                    timestamp=_metadata_value(payload, "timestamp"),
+                )
+    return None
 
 
 def _metadata_value(metadata: Dict[str, Any], key: str) -> str:
@@ -140,11 +173,13 @@ def parse_transcript(path: Path) -> TranscriptResult:
     event_unmatched: Dict[str, int] = {}
     response_unmatched: Dict[str, int] = {}
     outputs: List[str] = []
-    issues: List[str] = []
+    unknown_issues = set()
     for record in records:
         record_type = record.get("type")
         if record_type not in KNOWN_RECORD_TYPES:
-            issues.append("ignored unknown record type: {}".format(record_type))
+            unknown_issues.add(
+                "ignored unknown record type: {}".format(record_type)
+            )
             continue
         if record_type == "turn_context":
             event_unmatched.clear()
@@ -177,7 +212,7 @@ def parse_transcript(path: Path) -> TranscriptResult:
         timestamp=_metadata_value(metadata, "timestamp"),
         user_messages=messages,
         tool_outputs=outputs,
-        issues=issues,
+        issues=sorted(unknown_issues),
     )
 
 

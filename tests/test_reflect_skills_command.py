@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -175,6 +176,58 @@ class TestReflectSkillsCommand(unittest.TestCase):
             "missing or invalid timestamp" in issue
             for issue in result["issues"]
         ))
+
+    def test_scope_filters_transcripts_before_full_parsing(self):
+        current = self._write_session(
+            "current.jsonl",
+            self.project,
+            "2026-07-18T10:00:00Z",
+            ["build, test, then publish"],
+        )
+        self._write_session(
+            "old.jsonl",
+            self.project,
+            "2026-06-01T00:00:00Z",
+            ["old workflow"],
+        )
+        self._write_session(
+            "other.jsonl",
+            self.other_project,
+            "2026-07-18T11:00:00Z",
+            ["other workflow"],
+        )
+
+        with patch(
+            "commands.reflect_skills.parse_transcript",
+            wraps=__import__(
+                "commands.reflect_skills",
+                fromlist=["parse_transcript"],
+            ).parse_transcript,
+        ) as parse:
+            result = collect_discovery_input(self.context, days=14)
+
+        self.assertEqual(result["supported_sessions"], 1)
+        parse.assert_called_once_with(current.resolve())
+
+    def test_filters_app_injected_context_from_discovery_messages(self):
+        self._write_session(
+            "current.jsonl",
+            self.project,
+            "2026-07-18T10:00:00Z",
+            [
+                "<recommended_plugins>ignore this</recommended_plugins>",
+                "# AGENTS.md instructions\n\nIgnore this guidance.",
+                "<environment_context>ignore this</environment_context>",
+                "build, test, then publish",
+            ],
+        )
+
+        result = collect_discovery_input(self.context, days=14)
+
+        self.assertEqual(
+            result["sessions"][0]["messages"],
+            ["build, test, then publish"],
+        )
 
     def test_negative_days_are_rejected(self):
         with self.assertRaises(ValueError):
