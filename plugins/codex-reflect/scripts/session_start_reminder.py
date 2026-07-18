@@ -1,64 +1,82 @@
 #!/usr/bin/env python3
-"""Show pending learnings reminder at session start. SessionStart hook.
-
-Cross-platform compatible (Windows, macOS, Linux).
-This script is called by Claude Code's SessionStart hook to remind
-user of pending learnings that need review.
-"""
-import sys
+"""Report project-scoped codex-reflect state at SessionStart."""
+import json
 import os
+import sys
 
-# Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from lib.reflect_utils import load_queue, get_cleanup_period_days
+from lib.codex_hooks import HookEvent, system_message
+from lib.codex_paths import get_project_state_dir
+from lib.state_store import StateStore
+
+
+def _valid_cwd(data):
+    cwd = data.get("cwd") if isinstance(data, dict) else None
+    return isinstance(cwd, str) and bool(cwd) and os.path.isabs(cwd)
+
+
+def _format_item(item, index):
+    if not isinstance(item, dict):
+        return f"{index}. learning candidate"
+    message = item.get("message", "")
+    if not isinstance(message, str):
+        message = ""
+    if len(message) > 60:
+        message = message[:57] + "..."
+    confidence = item.get("confidence")
+    confidence_text = (
+        f"[{confidence:.0%}] "
+        if isinstance(confidence, (int, float))
+        else ""
+    )
+    return f"{index}. {confidence_text}{message or 'learning candidate'}"
 
 
 def main() -> int:
-    """Main entry point."""
-    # Check if reminder is disabled via environment variable
-    if os.environ.get("CLAUDE_REFLECT_REMINDER", "true").lower() == "false":
+    input_data = sys.stdin.read()
+    if not input_data:
+        return 0
+    try:
+        data = json.loads(input_data)
+    except json.JSONDecodeError:
+        return 0
+    if not _valid_cwd(data):
         return 0
 
-    # Warn if cleanupPeriodDays is not configured (self-resolving: stops once user sets it)
-    cleanup_days = get_cleanup_period_days()
-    if cleanup_days is None or cleanup_days <= 30:
-        print(f"\n⚠️  Claude Code deletes sessions after {cleanup_days or 30} days.")
-        print(f"   claude-reflect needs session history for /reflect and /reflect-skills.")
-        print(f"   Extend retention: add {{\"cleanupPeriodDays\": 99999}} to ~/.claude/settings.json")
+    event = HookEvent.from_dict(data)
+    store = StateStore(get_project_state_dir(event.cwd))
+    initialized = store.queue_path.exists()
+    items = store.load()
 
-    items = load_queue()
-
+    if not initialized:
+        print(json.dumps(system_message(
+            "codex-reflect is not initialized for this project. "
+            "Run $codex-reflect:reflect --scan-history to review available "
+            "Codex session history."
+        )))
+        return 0
     if not items:
         return 0
 
-    count = len(items)
-    print(f"\n{'='*50}")
-    print(f"📚 {count} pending learning(s) to review")
-    print(f"{'='*50}")
-
-    # Show up to 5 items
-    for i, item in enumerate(items[:5], 1):
-        msg = item.get("message", "")
-        # Truncate long messages
-        if len(msg) > 60:
-            msg = msg[:57] + "..."
-        confidence = item.get("confidence", 0.5)
-        print(f"  {i}. [{confidence:.0%}] {msg}")
-
-    if count > 5:
-        print(f"  ... and {count - 5} more")
-
-    print(f"\n💡 Run /reflect to review and apply")
-    print(f"{'='*50}\n")
-
+    lines = [f"codex-reflect has {len(items)} pending learning(s):"]
+    lines.extend(
+        _format_item(item, index)
+        for index, item in enumerate(items[:5], 1)
+    )
+    if len(items) > 5:
+        lines.append(f"... and {len(items) - 5} more")
+    lines.append("Run $codex-reflect:reflect to review them.")
+    print(json.dumps(system_message("\n".join(lines))))
     return 0
 
 
 if __name__ == "__main__":
     try:
-        sys.exit(main())
-    except Exception as e:
-        # Never block on errors - just log and exit 0
-        print(f"Warning: session_start_reminder.py error: {e}", file=sys.stderr)
-        sys.exit(0)
+        raise SystemExit(main())
+    except Exception as error:
+        print(
+            f"Warning: session_start_reminder.py error: {error}",
+            file=sys.stderr,
+        )
+        raise SystemExit(0)

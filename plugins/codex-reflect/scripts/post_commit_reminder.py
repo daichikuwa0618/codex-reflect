@@ -1,65 +1,69 @@
 #!/usr/bin/env python3
-"""Remind about /reflect after git commits. PostToolUse hook for Bash.
-
-Cross-platform compatible (Windows, macOS, Linux).
-This script is called by Claude Code's PostToolUse hook after Bash commands.
-It detects git commits and reminds the user to run /reflect.
-"""
-import sys
-import os
+"""Remind about queued learnings after a non-amend git commit."""
 import json
+import os
+import sys
 
-# Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from lib.reflect_utils import load_queue
+from lib.codex_hooks import HookEvent, system_message
+from lib.codex_paths import get_project_state_dir
+from lib.state_store import StateStore
+
+
+def _valid_cwd(data):
+    cwd = data.get("cwd") if isinstance(data, dict) else None
+    return isinstance(cwd, str) and bool(cwd) and os.path.isabs(cwd)
+
+
+def _command_from(tool_input):
+    value = (
+        tool_input["cmd"]
+        if "cmd" in tool_input
+        else tool_input.get("command")
+    )
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list) and all(
+        isinstance(part, str) for part in value
+    ):
+        return " ".join(value)
+    return ""
 
 
 def main() -> int:
-    """Main entry point."""
-    # Read hook input from stdin
     input_data = sys.stdin.read()
     if not input_data:
         return 0
-
     try:
         data = json.loads(input_data)
-        command = data.get("tool_input", {}).get("command", "")
     except json.JSONDecodeError:
         return 0
-
-    if not command:
+    if not _valid_cwd(data):
         return 0
 
-    # Check if it was a git commit command (not amend)
+    event = HookEvent.from_dict(data)
+    command = _command_from(event.tool_input)
     if "git commit" not in command or "--amend" in command:
         return 0
 
-    # Build reminder message
-    msg = "Git commit detected!"
-
-    items = load_queue()
+    items = StateStore(get_project_state_dir(event.cwd)).load()
+    message = "Git commit detected!"
     if items:
-        msg += f" You have {len(items)} queued learning(s)."
-
-    msg += " Feature complete? Run /reflect to process learnings."
-
-    # Output proper JSON for hook response
-    response = {
-        "hookSpecificOutput": {
-            "hookEventName": "PostToolUse",
-            "additionalContext": msg
-        }
-    }
-    print(json.dumps(response))
-
+        message += f" You have {len(items)} queued learning(s)."
+    message += (
+        " Feature complete? Run $codex-reflect:reflect to process learnings."
+    )
+    print(json.dumps(system_message(message)))
     return 0
 
 
 if __name__ == "__main__":
     try:
-        sys.exit(main())
-    except Exception as e:
-        # Never block on errors - just log and exit 0
-        print(f"Warning: post_commit_reminder.py error: {e}", file=sys.stderr)
-        sys.exit(0)
+        raise SystemExit(main())
+    except Exception as error:
+        print(
+            f"Warning: post_commit_reminder.py error: {error}",
+            file=sys.stderr,
+        )
+        raise SystemExit(0)

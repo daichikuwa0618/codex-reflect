@@ -1,51 +1,70 @@
 #!/usr/bin/env python3
-"""Backup queue before context compaction. PreCompact hook.
-
-Cross-platform compatible (Windows, macOS, Linux).
-This script is called by Claude Code's PreCompact hook to back up
-the learnings queue before context is compacted.
-"""
-import sys
+"""Atomically back up a project queue before Codex compacts context."""
+import json
 import os
+import sys
+import tempfile
+from datetime import datetime, timezone
 
-# Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from lib.reflect_utils import get_queue_path, get_backup_dir, load_queue, backup_timestamp
+from lib.codex_hooks import HookEvent, system_message
+from lib.codex_paths import get_project_state_dir
+from lib.state_store import StateStore
+
+
+def _valid_cwd(data):
+    cwd = data.get("cwd") if isinstance(data, dict) else None
+    return isinstance(cwd, str) and bool(cwd) and os.path.isabs(cwd)
+
+
+def _write_backup(items, backup_dir):
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+    backup_path = backup_dir / f"pre-compact-{timestamp}.json"
+    fd, temp_name = tempfile.mkstemp(
+        dir=str(backup_dir), prefix="pre-compact-", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(items, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, backup_path)
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
+    return backup_path
 
 
 def main() -> int:
-    """Main entry point."""
-    items = load_queue()
+    input_data = sys.stdin.read()
+    if not input_data:
+        return 0
+    try:
+        data = json.loads(input_data)
+    except json.JSONDecodeError:
+        return 0
+    if not _valid_cwd(data):
+        return 0
+
+    event = HookEvent.from_dict(data)
+    state_dir = get_project_state_dir(event.cwd)
+    items = StateStore(state_dir).load()
     if not items:
         return 0
 
-    queue_path = get_queue_path()
-
-    # Create backup directory if needed
-    backup_dir = get_backup_dir()
-    backup_dir.mkdir(parents=True, exist_ok=True)
-
-    # Save backup with timestamp
-    backup_file = backup_dir / f"pre-compact-{backup_timestamp()}.json"
-    backup_file.write_text(
-        queue_path.read_text(encoding="utf-8") if queue_path.exists() else "[]",
-        encoding="utf-8",
-    )
-
-    # Output informational message (non-blocking)
-    print()
-    print(f"Note: {len(items)} learning(s) backed up to {backup_file}")
-    print("Run /reflect in new session to process.")
-    print()
-
+    backup_path = _write_backup(items, state_dir / "backups")
+    print(json.dumps(system_message(
+        f"codex-reflect backed up {len(items)} learning(s) to {backup_path}."
+    )))
     return 0
 
 
 if __name__ == "__main__":
     try:
-        sys.exit(main())
-    except Exception as e:
-        # Never block on errors - just log and exit 0
-        print(f"Warning: check_learnings.py error: {e}", file=sys.stderr)
-        sys.exit(0)
+        raise SystemExit(main())
+    except Exception as error:
+        print(f"Warning: check_learnings.py error: {error}", file=sys.stderr)
+        raise SystemExit(0)

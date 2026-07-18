@@ -2,10 +2,6 @@
 """Contract tests for the nested Codex plugin package."""
 
 import json
-import os
-import subprocess
-import sys
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -15,15 +11,17 @@ PLUGIN_ROOT = REPO_ROOT / "plugins" / "codex-reflect"
 MANIFEST_PATH = PLUGIN_ROOT / ".codex-plugin" / "plugin.json"
 HOOKS_PATH = PLUGIN_ROOT / "hooks" / "hooks.json"
 MARKETPLACE_PATH = REPO_ROOT / ".agents" / "plugins" / "marketplace.json"
-PROBE_PATH = PLUGIN_ROOT / "scripts" / "capability_probe_hook.py"
 SKILL_NAMES = ("reflect", "reflect-skills", "view-queue", "skip-reflect")
 SKILL_BODY = (
-    "Resolve `../../scripts/capability_probe_hook.py` relative to this SKILL.md "
-    'and run it with stdin `{"hook_event_name":"SkillProbe"}`. Report its '
-    "`systemMessage` and do not edit files."
+    "Report that this workflow is not available in this build. "
+    "Do not run scripts or edit files."
 )
-PROBE_COMMAND = 'python3 "${PLUGIN_ROOT}/scripts/capability_probe_hook.py"'
 CAPTURE_COMMAND = 'python3 "${PLUGIN_ROOT}/scripts/capture_learning.py"'
+PRECOMPACT_COMMAND = 'python3 "${PLUGIN_ROOT}/scripts/check_learnings.py"'
+POST_TOOL_COMMAND = 'python3 "${PLUGIN_ROOT}/scripts/post_commit_reminder.py"'
+SESSION_START_COMMAND = (
+    'python3 "${PLUGIN_ROOT}/scripts/session_start_reminder.py"'
+)
 
 
 class TestCodexPluginContract(unittest.TestCase):
@@ -76,68 +74,33 @@ class TestCodexPluginContract(unittest.TestCase):
         user_prompt_handler = hook_groups["UserPromptSubmit"][0]["hooks"][0]
         self.assertEqual(user_prompt_handler["command"], CAPTURE_COMMAND)
 
-        for event_name in ("PreCompact", "PostToolUse", "SessionStart"):
+        expected_commands = {
+            "PreCompact": PRECOMPACT_COMMAND,
+            "PostToolUse": POST_TOOL_COMMAND,
+            "SessionStart": SESSION_START_COMMAND,
+        }
+        for event_name, expected_command in expected_commands.items():
             for group in hook_groups[event_name]:
                 for handler in group["hooks"]:
                     self.assertEqual(handler["type"], "command")
-                    self.assertEqual(handler["command"], PROBE_COMMAND)
+                    self.assertEqual(handler["command"], expected_command)
                     self.assertIn("${PLUGIN_ROOT}", handler["command"])
                     self.assertNotIn("CLAUDE_PLUGIN_ROOT", handler["command"])
 
-    def test_capability_probe_is_write_free_and_reports_only_field_names(self):
-        self.assertTrue(PROBE_PATH.is_file(), f"missing {PROBE_PATH}")
-        payload = {
-            "hook_event_name": "PostToolUse",
-            "session_id": "secret-session-value",
-            "prompt": "secret prompt value",
-            "tool_input": {
-                "command": "secret command value",
-                "path": "secret path value",
-            },
-            "ignored_field": "secret ignored value",
-        }
+    def test_runtime_package_has_no_phase_zero_probe_reference(self):
+        probe_path = PLUGIN_ROOT / "scripts" / "capability_probe_hook.py"
+        self.assertFalse(probe_path.exists(), f"obsolete {probe_path}")
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_root = Path(temp_dir)
-            codex_home = temp_root / "codex-home"
-            codex_home.mkdir()
-            project_dir = temp_root / "project"
-            project_dir.mkdir()
-            state_root = codex_home / "codex-reflect"
-            env = os.environ.copy()
-            env["CODEX_HOME"] = str(codex_home)
-
-            result = subprocess.run(
-                [sys.executable, str(PROBE_PATH)],
-                input=json.dumps(payload),
-                capture_output=True,
-                text=True,
-                cwd=project_dir,
-                env=env,
-                check=False,
+        for path in PLUGIN_ROOT.rglob("*"):
+            if not path.is_file() or path.suffix not in {
+                ".json", ".md", ".py", ".sh"
+            }:
+                continue
+            self.assertNotIn(
+                "capability_probe_hook.py",
+                path.read_text(encoding="utf-8"),
+                f"obsolete probe reference in {path}",
             )
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            output = json.loads(result.stdout)
-            self.assertIs(output["continue"], True)
-            message = output["systemMessage"]
-            self.assertIn("PostToolUse", message)
-            self.assertIn(
-                "fields=hook_event_name,prompt,session_id,tool_input",
-                message,
-            )
-            self.assertIn("tool_input_fields=command,path", message)
-            self.assertIn(f"state_root={state_root}", message)
-            for secret_value in (
-                "secret-session-value",
-                "secret prompt value",
-                "secret command value",
-                "secret path value",
-                "secret ignored value",
-            ):
-                self.assertNotIn(secret_value, message)
-            self.assertFalse(state_root.exists())
-            self.assertEqual(list(project_dir.iterdir()), [])
 
 
 if __name__ == "__main__":

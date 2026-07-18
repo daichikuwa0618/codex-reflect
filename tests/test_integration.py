@@ -21,6 +21,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "codex-reflect"
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
+from lib.codex_paths import get_project_id
+
 BASH_SCRIPTS = {
     "check_learnings": SCRIPTS_DIR / "legacy" / "check-learnings.sh",
     "post_commit_reminder": SCRIPTS_DIR / "legacy" / "post-commit-reminder.sh",
@@ -29,6 +31,7 @@ BASH_SCRIPTS = {
     "extract_tool_rejections": SCRIPTS_DIR / "legacy" / "extract-tool-rejections.sh",
 }
 PYTHON_SCRIPTS = {
+    "session_start_reminder": SCRIPTS_DIR / "session_start_reminder.py",
     "check_learnings": SCRIPTS_DIR / "check_learnings.py",
     "post_commit_reminder": SCRIPTS_DIR / "post_commit_reminder.py",
     "capture_learning": SCRIPTS_DIR / "capture_learning.py",
@@ -195,106 +198,349 @@ class TestCaptureLearning(unittest.TestCase):
         self.assertEqual(queue_path.read_text(encoding="utf-8"), "{broken")
 
 
-class TestPostCommitReminder(unittest.TestCase):
-    """Tests for post-commit reminder hook."""
+class CodexLifecycleHookTestCase(unittest.TestCase):
+    """Temporary Codex home and project for lifecycle Hook integration."""
 
     def setUp(self):
-        """Set up test fixtures."""
-        self.temp_dir = tempfile.mkdtemp()
-        self.queue_path = Path(self.temp_dir) / ".claude" / "learnings-queue.json"
-        self.queue_path.parent.mkdir(parents=True, exist_ok=True)
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_root = Path(self.temp_dir.name)
+        self.codex_home = self.temp_root / "codex-home"
+        self.project = self.temp_root / "project"
+        self.other_project = self.temp_root / "other-project"
+        self.codex_home.mkdir()
+        self.project.mkdir()
+        self.other_project.mkdir()
+        self.env = os.environ.copy()
+        self.env["CODEX_HOME"] = str(self.codex_home)
+        self.project_state = self._project_state(self.project)
 
     def tearDown(self):
-        """Clean up temporary files."""
-        import shutil
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
+        self.temp_dir.cleanup()
 
-    @skip_on_windows
-    def test_bash_git_commit_detected(self):
-        """Test bash script detects git commit."""
-        stdin = json.dumps({"tool_input": {"command": "git commit -m 'test'"}})
-        stdout, stderr, code = run_bash_script(
-            BASH_SCRIPTS["post_commit_reminder"], stdin=stdin
+    def _project_state(self, project):
+        return (
+            self.codex_home
+            / "codex-reflect"
+            / "projects"
+            / get_project_id(str(project))
         )
+
+    def write_queue(self, items, project=None):
+        state = self._project_state(project or self.project)
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "queue.json").write_text(
+            json.dumps(items), encoding="utf-8"
+        )
+        return state
+
+    def run_hook(self, name, payload):
+        stdin = payload if isinstance(payload, str) else json.dumps(payload)
+        return run_python_script(
+            PYTHON_SCRIPTS[name], stdin=stdin, env=self.env
+        )
+
+    def assert_invalid_cwd_is_skipped(self, name, extra_payload=None):
+        for cwd in (None, "", "relative/project", ["not", "a", "path"]):
+            with self.subTest(cwd=cwd):
+                payload = {
+                    "hook_event_name": "test",
+                    "cwd": cwd,
+                    **(extra_payload or {}),
+                }
+                stdout, stderr, code = self.run_hook(name, payload)
+                self.assertEqual((stdout, stderr, code), ("", "", 0))
+                self.assertFalse(
+                    (self.codex_home / "codex-reflect").exists()
+                )
+
+
+class TestSessionStartReminder(CodexLifecycleHookTestCase):
+    def test_session_start_returns_codex_system_message_when_uninitialized(self):
+        payload = {
+            "hook_event_name": "SessionStart",
+            "cwd": str(self.project),
+            "session_id": "s1",
+        }
+
+        stdout, stderr, code = self.run_hook(
+            "session_start_reminder", payload
+        )
+
         self.assertEqual(code, 0)
-        self.assertIn("Git commit detected", stdout)
+        self.assertEqual(stderr, "")
+        self.assertNotEqual(stdout, "")
+        response = json.loads(stdout)
+        self.assertIn("systemMessage", response)
+        self.assertIs(response["continue"], True)
+        self.assertIn("reflect --scan-history", response["systemMessage"])
+        self.assertFalse((self.codex_home / "codex-reflect").exists())
 
-    def test_python_git_commit_detected(self):
-        """Test Python script detects git commit."""
-        stdin = json.dumps({"tool_input": {"command": "git commit -m 'test'"}})
-        stdout, stderr, code = run_python_script(
-            PYTHON_SCRIPTS["post_commit_reminder"], stdin=stdin
+    def test_session_start_shows_at_most_five_items_from_event_project(self):
+        self.write_queue([
+            {"message": f"project item {index}", "confidence": 0.75}
+            for index in range(1, 7)
+        ])
+        self.write_queue(
+            [{"message": "other project item", "confidence": 1.0}],
+            self.other_project,
         )
+
+        stdout, stderr, code = self.run_hook("session_start_reminder", {
+            "hook_event_name": "SessionStart",
+            "cwd": str(self.project),
+            "session_id": "s1",
+        })
+
         self.assertEqual(code, 0)
-        self.assertIn("Git commit detected", stdout)
+        self.assertEqual(stderr, "")
+        self.assertNotEqual(stdout, "")
+        message = json.loads(stdout)["systemMessage"]
+        for index in range(1, 6):
+            self.assertIn(f"project item {index}", message)
+        self.assertNotIn("project item 6", message)
+        self.assertNotIn("other project item", message)
+        self.assertIn("1 more", message)
 
-    @skip_on_windows
-    def test_bash_ignores_amend(self):
-        """Test bash script ignores --amend commits."""
-        stdin = json.dumps({"tool_input": {"command": "git commit --amend -m 'test'"}})
-        stdout, stderr, code = run_bash_script(
-            BASH_SCRIPTS["post_commit_reminder"], stdin=stdin
-        )
+    def test_initialized_empty_queue_has_no_output(self):
+        self.write_queue([])
+
+        result = self.run_hook("session_start_reminder", {
+            "hook_event_name": "SessionStart",
+            "cwd": str(self.project),
+        })
+
+        self.assertEqual(result, ("", "", 0))
+
+    def test_invalid_cwd_is_skipped_without_state_write(self):
+        self.assert_invalid_cwd_is_skipped("session_start_reminder")
+
+    def test_empty_and_invalid_json_exit_zero(self):
+        for stdin in ("", "not json"):
+            with self.subTest(stdin=stdin):
+                self.assertEqual(
+                    self.run_hook("session_start_reminder", stdin),
+                    ("", "", 0),
+                )
+
+    def test_queue_io_error_exits_zero_without_overwriting(self):
+        self.project_state.mkdir(parents=True)
+        queue_path = self.project_state / "queue.json"
+        queue_path.mkdir()
+
+        stdout, stderr, code = self.run_hook("session_start_reminder", {
+            "hook_event_name": "SessionStart",
+            "cwd": str(self.project),
+        })
+
         self.assertEqual(code, 0)
-        self.assertNotIn("Git commit detected", stdout)
+        self.assertEqual(stdout, "")
+        self.assertIn("Warning: session_start_reminder.py error:", stderr)
+        self.assertTrue(queue_path.is_dir())
 
-    def test_python_ignores_amend(self):
-        """Test Python script ignores --amend commits."""
-        stdin = json.dumps({"tool_input": {"command": "git commit --amend -m 'test'"}})
-        stdout, stderr, code = run_python_script(
-            PYTHON_SCRIPTS["post_commit_reminder"], stdin=stdin
-        )
+
+class TestCheckLearnings(CodexLifecycleHookTestCase):
+    def test_empty_queue_has_no_output_or_backup(self):
+        self.write_queue([])
+
+        result = self.run_hook("check_learnings", {
+            "hook_event_name": "PreCompact",
+            "cwd": str(self.project),
+            "session_id": "s1",
+        })
+
+        self.assertEqual(result, ("", "", 0))
+        self.assertFalse((self.project_state / "backups").exists())
+
+    def test_precompact_creates_atomic_project_backup(self):
+        items = [{"message": "keep this", "schema_version": 1}]
+        self.write_queue(items)
+
+        stdout, stderr, code = self.run_hook("check_learnings", {
+            "hook_event_name": "PreCompact",
+            "cwd": str(self.project),
+            "session_id": "s1",
+        })
+
         self.assertEqual(code, 0)
-        self.assertNotIn("Git commit detected", stdout)
-
-    @skip_on_windows
-    def test_bash_ignores_non_commit(self):
-        """Test bash script ignores non-commit commands."""
-        stdin = json.dumps({"tool_input": {"command": "ls -la"}})
-        stdout, stderr, code = run_bash_script(
-            BASH_SCRIPTS["post_commit_reminder"], stdin=stdin
+        self.assertEqual(stderr, "")
+        self.assertNotEqual(stdout, "")
+        response = json.loads(stdout)
+        self.assertIn("systemMessage", response)
+        self.assertIs(response["continue"], True)
+        self.assertIn("1 learning", response["systemMessage"])
+        backups = list((self.project_state / "backups").glob(
+            "pre-compact-*.json"
+        ))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(
+            json.loads(backups[0].read_text(encoding="utf-8")), items
         )
+        self.assertEqual(
+            list((self.project_state / "backups").glob("*.tmp")), []
+        )
+
+    def test_invalid_cwd_is_skipped_without_state_write(self):
+        self.assert_invalid_cwd_is_skipped("check_learnings")
+
+    def test_empty_and_invalid_json_exit_zero(self):
+        for stdin in ("", "not json"):
+            with self.subTest(stdin=stdin):
+                self.assertEqual(
+                    self.run_hook("check_learnings", stdin),
+                    ("", "", 0),
+                )
+
+    def test_queue_io_error_exits_zero_without_backup(self):
+        self.project_state.mkdir(parents=True)
+        queue_path = self.project_state / "queue.json"
+        queue_path.mkdir()
+
+        stdout, stderr, code = self.run_hook("check_learnings", {
+            "hook_event_name": "PreCompact",
+            "cwd": str(self.project),
+        })
+
         self.assertEqual(code, 0)
-        self.assertEqual(stdout.strip(), "")
+        self.assertEqual(stdout, "")
+        self.assertIn("Warning: check_learnings.py error:", stderr)
+        self.assertFalse((self.project_state / "backups").exists())
 
-    def test_python_ignores_non_commit(self):
-        """Test Python script ignores non-commit commands."""
-        stdin = json.dumps({"tool_input": {"command": "ls -la"}})
-        stdout, stderr, code = run_python_script(
-            PYTHON_SCRIPTS["post_commit_reminder"], stdin=stdin
-        )
+
+class TestPostCommitReminder(CodexLifecycleHookTestCase):
+    def run_post_tool_use(self, tool_input, **extra):
+        return self.run_hook("post_commit_reminder", {
+            "hook_event_name": "PostToolUse",
+            "cwd": str(self.project),
+            "tool_name": "Bash",
+            "tool_input": tool_input,
+            **extra,
+        })
+
+    def test_detects_non_amend_commit_from_cmd(self):
+        stdout, stderr, code = self.run_post_tool_use({
+            "cmd": "git commit -m test"
+        })
+
         self.assertEqual(code, 0)
-        self.assertEqual(stdout.strip(), "")
+        self.assertEqual(stderr, "")
+        self.assertNotEqual(stdout, "")
+        response = json.loads(stdout)
+        self.assertIn("systemMessage", response)
+        self.assertIs(response["continue"], True)
+        self.assertIn("Git commit detected", response["systemMessage"])
 
-    @skip_on_windows
-    def test_bash_empty_input(self):
-        """Test bash script handles empty input."""
-        stdout, stderr, code = run_bash_script(
-            BASH_SCRIPTS["post_commit_reminder"], stdin=""
-        )
+    def test_normalizes_string_list_cmd(self):
+        stdout, stderr, code = self.run_post_tool_use({
+            "cmd": ["git", "commit", "-m", "test"]
+        })
+
         self.assertEqual(code, 0)
-
-    def test_python_empty_input(self):
-        """Test Python script handles empty input."""
-        stdout, stderr, code = run_python_script(
-            PYTHON_SCRIPTS["post_commit_reminder"], stdin=""
+        self.assertEqual(stderr, "")
+        self.assertNotEqual(stdout, "")
+        response = json.loads(stdout)
+        self.assertIn("systemMessage", response)
+        self.assertIn(
+            "Git commit detected", response["systemMessage"]
         )
+
+    def test_falls_back_to_command_when_cmd_is_absent(self):
+        stdout, stderr, code = self.run_post_tool_use({
+            "command": "git commit -m test"
+        })
+
         self.assertEqual(code, 0)
-
-    @skip_on_windows
-    def test_bash_invalid_json(self):
-        """Test bash script handles invalid JSON."""
-        stdout, stderr, code = run_bash_script(
-            BASH_SCRIPTS["post_commit_reminder"], stdin="not json"
+        self.assertEqual(stderr, "")
+        self.assertNotEqual(stdout, "")
+        response = json.loads(stdout)
+        self.assertIn("systemMessage", response)
+        self.assertIn(
+            "Git commit detected", response["systemMessage"]
         )
-        self.assertEqual(code, 0)  # Should not crash
 
-    def test_python_invalid_json(self):
-        """Test Python script handles invalid JSON."""
-        stdout, stderr, code = run_python_script(
-            PYTHON_SCRIPTS["post_commit_reminder"], stdin="not json"
+    def test_does_not_fall_back_when_cmd_is_present(self):
+        result = self.run_post_tool_use({
+            "cmd": "ls",
+            "command": "git commit -m test",
+        })
+
+        self.assertEqual(result, ("", "", 0))
+
+    def test_ignores_amend_and_non_commit_commands(self):
+        for cmd in ("git commit --amend -m test", "git status"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(
+                    self.run_post_tool_use({"cmd": cmd}),
+                    ("", "", 0),
+                )
+
+    def test_ignores_non_string_command_values(self):
+        for cmd in (123, {"value": "git commit"}, ["git", 123, "commit"]):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(
+                    self.run_post_tool_use({"cmd": cmd}),
+                    ("", "", 0),
+                )
+
+    def test_does_not_read_nested_fields_or_tool_output(self):
+        payloads = (
+            ({"nested": {"cmd": "git commit -m test"}}, {}),
+            ({}, {"tool_response": {"cmd": "git commit -m test"}}),
+            ({}, {"command": "git commit -m test"}),
         )
-        self.assertEqual(code, 0)  # Should not crash
+        for tool_input, extra in payloads:
+            with self.subTest(tool_input=tool_input, extra=extra):
+                self.assertEqual(
+                    self.run_post_tool_use(tool_input, **extra),
+                    ("", "", 0),
+                )
+
+    def test_commit_message_in_tool_output_does_not_trigger(self):
+        result = self.run_post_tool_use(
+            {"cmd": "git status"},
+            tool_response="previous command: git commit -m test",
+        )
+
+        self.assertEqual(result, ("", "", 0))
+
+    def test_valid_commit_uses_only_event_project_queue(self):
+        self.write_queue([{"message": "current"}])
+        self.write_queue(
+            [{"message": "other"}, {"message": "other two"}],
+            self.other_project,
+        )
+
+        stdout, _, _ = self.run_post_tool_use({"cmd": "git commit -m test"})
+
+        self.assertNotEqual(stdout, "")
+        message = json.loads(stdout)["systemMessage"]
+        self.assertIn("1 queued learning", message)
+        self.assertNotIn("2 queued", message)
+
+    def test_invalid_cwd_is_skipped_without_state_write(self):
+        self.assert_invalid_cwd_is_skipped(
+            "post_commit_reminder",
+            {"tool_name": "Bash", "tool_input": {"cmd": "git commit -m x"}},
+        )
+
+    def test_empty_and_invalid_json_exit_zero(self):
+        for stdin in ("", "not json"):
+            with self.subTest(stdin=stdin):
+                self.assertEqual(
+                    self.run_hook("post_commit_reminder", stdin),
+                    ("", "", 0),
+                )
+
+    def test_queue_io_error_exits_zero_without_output(self):
+        self.project_state.mkdir(parents=True)
+        (self.project_state / "queue.json").mkdir()
+
+        stdout, stderr, code = self.run_post_tool_use({
+            "cmd": "git commit -m test"
+        })
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout, "")
+        self.assertIn("Warning: post_commit_reminder.py error:", stderr)
 
 
 class TestExtractSessionLearnings(unittest.TestCase):
