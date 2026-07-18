@@ -1,0 +1,11 @@
+{
+  "name": "codex-reflect",
+  "version": "4.0.0-rc.1",
+  "description": "Capture Codex corrections and turn them into reviewed AGENTS.md guidance and reusable skills.",
+  "author": { "name": "daichikuwa0618", "url": "https://github.com/daichikuwa0618" },
+  "repository": "https://github.com/daichikuwa0618/codex-reflect",
+  "license": "MIT",
+  "keywords": ["codex", "self-learning", "corrections", "AGENTS.md", "skills"],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json"
+}
