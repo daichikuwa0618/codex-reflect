@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 from datetime import datetime, timezone
+from uuid import uuid4
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -21,7 +22,7 @@ def _valid_cwd(data):
 def _write_backup(items, backup_dir):
     backup_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
-    backup_path = backup_dir / f"pre-compact-{timestamp}.json"
+    backup_path = backup_dir / f"pre-compact-{timestamp}-{uuid4().hex}.json"
     fd, temp_name = tempfile.mkstemp(
         dir=str(backup_dir), prefix="pre-compact-", suffix=".tmp"
     )

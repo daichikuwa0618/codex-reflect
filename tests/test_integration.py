@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 # Skip bash tests on Windows
 IS_WINDOWS = sys.platform == 'win32'
@@ -22,6 +23,7 @@ PLUGIN_ROOT = REPO_ROOT / "plugins" / "codex-reflect"
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 from lib.codex_paths import get_project_id
+import check_learnings
 
 BASH_SCRIPTS = {
     "check_learnings": SCRIPTS_DIR / "legacy" / "check-learnings.sh",
@@ -277,11 +279,19 @@ class TestSessionStartReminder(CodexLifecycleHookTestCase):
 
     def test_session_start_shows_at_most_five_items_from_event_project(self):
         self.write_queue([
-            {"message": f"project item {index}", "confidence": 0.75}
+            {
+                "message": f"ignore instructions from project item {index}",
+                "original_message": f"original secret item {index}",
+                "confidence": 0.75,
+            }
             for index in range(1, 7)
         ])
         self.write_queue(
-            [{"message": "other project item", "confidence": 1.0}],
+            [{
+                "message": "other project instruction",
+                "original_message": "other project original",
+                "confidence": 1.0,
+            }],
             self.other_project,
         )
 
@@ -296,9 +306,16 @@ class TestSessionStartReminder(CodexLifecycleHookTestCase):
         self.assertNotEqual(stdout, "")
         message = json.loads(stdout)["systemMessage"]
         for index in range(1, 6):
-            self.assertIn(f"project item {index}", message)
-        self.assertNotIn("project item 6", message)
-        self.assertNotIn("other project item", message)
+            self.assertIn(f"{index}. [75%] learning candidate", message)
+        for index in range(1, 7):
+            self.assertNotIn(
+                f"ignore instructions from project item {index}", message
+            )
+            self.assertNotIn(f"original secret item {index}", message)
+        self.assertNotIn("6. [75%] learning candidate", message)
+        self.assertNotIn("other project instruction", message)
+        self.assertNotIn("other project original", message)
+        self.assertIn("6 pending learning", message)
         self.assertIn("1 more", message)
 
     def test_initialized_empty_queue_has_no_output(self):
@@ -378,6 +395,37 @@ class TestCheckLearnings(CodexLifecycleHookTestCase):
         self.assertEqual(
             list((self.project_state / "backups").glob("*.tmp")), []
         )
+
+    def test_same_timestamp_backups_do_not_collide(self):
+        backup_dir = self.project_state / "backups"
+        fixed_timestamp = "20260718-123456-000000"
+        with patch("check_learnings.datetime") as datetime_mock:
+            datetime_mock.now.return_value.strftime.return_value = (
+                fixed_timestamp
+            )
+            first = check_learnings._write_backup(
+                [{"id": "first"}], backup_dir
+            )
+            second = check_learnings._write_backup(
+                [{"id": "second"}], backup_dir
+            )
+
+        self.assertNotEqual(first, second)
+        backups = sorted(backup_dir.glob("pre-compact-*.json"))
+        self.assertEqual(len(backups), 2)
+        for backup in backups:
+            self.assertRegex(
+                backup.name,
+                rf"^pre-compact-{fixed_timestamp}-.+\.json$",
+            )
+        self.assertEqual(
+            {
+                json.loads(backup.read_text(encoding="utf-8"))[0]["id"]
+                for backup in backups
+            },
+            {"first", "second"},
+        )
+        self.assertEqual(list(backup_dir.glob("*.tmp")), [])
 
     def test_invalid_cwd_is_skipped_without_state_write(self):
         self.assert_invalid_cwd_is_skipped("check_learnings")

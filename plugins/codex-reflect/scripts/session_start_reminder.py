@@ -17,20 +17,13 @@ def _valid_cwd(data):
 
 
 def _format_item(item, index):
-    if not isinstance(item, dict):
-        return f"{index}. learning candidate"
-    message = item.get("message", "")
-    if not isinstance(message, str):
-        message = ""
-    if len(message) > 60:
-        message = message[:57] + "..."
-    confidence = item.get("confidence")
+    confidence = item.get("confidence") if isinstance(item, dict) else None
     confidence_text = (
         f"[{confidence:.0%}] "
         if isinstance(confidence, (int, float))
         else ""
     )
-    return f"{index}. {confidence_text}{message or 'learning candidate'}"
+    return f"{index}. {confidence_text}learning candidate"
 
 
 def main() -> int:
