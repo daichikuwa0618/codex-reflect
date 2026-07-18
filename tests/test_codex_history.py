@@ -41,6 +41,120 @@ class TestCodexHistory(unittest.TestCase):
             ["no, use rg instead of grep", "remember: run focused tests"],
         )
 
+    def test_deduplicates_response_then_event_pair(self):
+        result = self._parse_records([
+            {"type": "session_meta", "payload": {"id": "s1"}},
+            {"type": "turn_context", "payload": {}},
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "same prompt"}],
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "same prompt"},
+            },
+        ])
+
+        self.assertEqual(result.user_messages, ["same prompt"])
+
+    def test_same_prompt_in_two_turns_is_preserved_twice(self):
+        result = self._parse_records([
+            {"type": "session_meta", "payload": {"id": "s1"}},
+            {"type": "turn_context", "payload": {"turn": 1}},
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "repeat prompt"},
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "repeat prompt"}],
+                },
+            },
+            {"type": "turn_context", "payload": {"turn": 2}},
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "repeat prompt"},
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "repeat prompt"}],
+                },
+            },
+        ])
+
+        self.assertEqual(result.user_messages, ["repeat prompt", "repeat prompt"])
+
+    def test_turn_context_resets_unmatched_pair_state_without_payload(self):
+        result = self._parse_records([
+            {"type": "session_meta", "payload": {"id": "s1"}},
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "repeat prompt"},
+            },
+            {"type": "turn_context"},
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "repeat prompt"}],
+                },
+            },
+        ])
+
+        self.assertEqual(result.user_messages, ["repeat prompt", "repeat prompt"])
+
+    def test_repeated_same_source_occurrences_are_not_deduplicated(self):
+        result = self._parse_records([
+            {"type": "session_meta", "payload": {"id": "s1"}},
+            {"type": "turn_context", "payload": {}},
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "repeat prompt"},
+            },
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "repeat prompt"},
+            },
+        ])
+
+        self.assertEqual(result.user_messages, ["repeat prompt", "repeat prompt"])
+
+    def test_pairing_uses_raw_text_not_redacted_text(self):
+        result = self._parse_records([
+            {"type": "session_meta", "payload": {"id": "s1"}},
+            {"type": "turn_context", "payload": {}},
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "TOKEN=first-secret"},
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "TOKEN=second-secret"}
+                    ],
+                },
+            },
+        ])
+
+        self.assertEqual(
+            result.user_messages,
+            ["TOKEN=[REDACTED]", "TOKEN=[REDACTED]"],
+        )
+
     def test_unknown_schema_is_reported_not_guessed(self):
         result = parse_transcript(FIXTURES / "unknown-rollout.jsonl")
 
@@ -182,6 +296,53 @@ class TestCodexHistory(unittest.TestCase):
             },
         )
 
+    def test_end_to_end_tool_outputs_leave_no_raw_secret_values(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "redaction-e2e.jsonl"
+            records = [
+                {"type": "session_meta", "payload": {"id": "s1"}},
+                {"type": "turn_context", "payload": {}},
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call_output",
+                        "output": (
+                            r'{\"token\":\"escaped-string-secret\"} '
+                            "Authorization=Bearer bearer-secret-value"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call_output",
+                        "output": {
+                            "AWS_SECRET_ACCESS_KEY": "aws-secret-value",
+                            "nested": [
+                                {"clientSecret": "client-secret-value"},
+                                {"monkey": "banana"},
+                            ],
+                        },
+                    },
+                },
+            ]
+            path.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+
+            result = parse_transcript(path)
+
+        combined = "\n".join(result.tool_outputs)
+        for secret in (
+            "escaped-string-secret",
+            "bearer-secret-value",
+            "aws-secret-value",
+            "client-secret-value",
+        ):
+            self.assertNotIn(secret, combined)
+        self.assertIn('"monkey": "banana"', combined)
+
     def test_invalid_jsonl_reports_line_number(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "broken.jsonl"
@@ -277,6 +438,15 @@ class TestCodexHistory(unittest.TestCase):
         except OSError as error:
             self.skipTest("symlinks unavailable: {}".format(type(error).__name__))
 
+    def _parse_records(self, records):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "records.jsonl"
+            path.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            return parse_transcript(path)
+
 
 class TestSecretRedaction(unittest.TestCase):
     def test_redacts_assignment_and_bearer_token_values_only(self):
@@ -322,6 +492,52 @@ class TestSecretRedaction(unittest.TestCase):
 
         self.assertEqual(redacted, "Authorization=[REDACTED]")
         self.assertNotIn("fake-secret-value", redacted)
+
+    def test_secret_identifier_components_cover_common_key_styles(self):
+        values = (
+            ("AWS_SECRET_ACCESS_KEY=aws-value", "aws-value"),
+            ("GITHUB_TOKEN=github-value", "github-value"),
+            ("access_token=access-value", "access-value"),
+            ("clientSecret=client-value", "client-value"),
+            ("API_KEY=api-value", "api-value"),
+            ("x-client-secret: header-value", "header-value"),
+        )
+
+        for value, secret in values:
+            with self.subTest(value=value):
+                redacted = redact_secrets(value)
+                self.assertIn("[REDACTED]", redacted)
+                self.assertNotIn(secret, redacted)
+
+    def test_secret_component_detection_avoids_substring_false_positive(self):
+        self.assertEqual(
+            redact_secrets("monkey=banana hockey=puck"),
+            "monkey=banana hockey=puck",
+        )
+
+    def test_redacts_backslash_quoted_json_assignment(self):
+        value = r'{\"token\":\"escaped-secret-value\"}'
+
+        self.assertEqual(
+            redact_secrets(value),
+            r'{\"token\":\"[REDACTED]\"}',
+        )
+
+    def test_escaped_quote_inside_json_value_does_not_leak_suffix(self):
+        value = '{"token": "prefix\\\"suffix-secret"}'
+
+        redacted = redact_secrets(value)
+
+        self.assertEqual(redacted, '{"token": "[REDACTED]"}')
+        self.assertNotIn("suffix-secret", redacted)
+
+    def test_escaped_quote_inside_backslash_quoted_json_value_does_not_leak(self):
+        value = r'{\"token\":\"prefix\\\"suffix-secret\"}'
+
+        redacted = redact_secrets(value)
+
+        self.assertEqual(redacted, r'{\"token\":\"[REDACTED]\"}')
+        self.assertNotIn("suffix-secret", redacted)
 
     def test_does_not_redact_non_secret_assignments(self):
         self.assertEqual(redact_secrets("COUNT=3 MODE=test"), "COUNT=3 MODE=test")

@@ -3,20 +3,24 @@ import re
 from typing import Any
 
 
-_SECRET_KEY = (
-    r"(?:api[_-]?key|secret|token|password|passwd|credential|cookie|"
-    r"authorization)"
-)
-_SECRET_KEY_PATTERN = re.compile(r"(?i)^{}$".format(_SECRET_KEY))
-_ASSIGNMENT_PATTERN = re.compile(
-    r"(?i)(\b{}\b\s*=\s*)"
-    r"(\"[^\r\n\"]*\"|'[^\r\n']*'|Bearer\s+[^\s,;}}\]]+|"
-    r"[^\s,;}}\]]+)".format(_SECRET_KEY)
-)
-_JSON_ASSIGNMENT_PATTERN = re.compile(
-    r"(?i)([\"']{}[\"']\s*:\s*)([\"'])([^\r\n]*?)(\2)".format(
-        _SECRET_KEY
-    )
+_SECRET_COMPONENTS = {
+    "authorization",
+    "cookie",
+    "credential",
+    "key",
+    "passwd",
+    "password",
+    "secret",
+    "token",
+}
+_IDENTIFIER = r"[A-Za-z][A-Za-z0-9_-]*"
+_ASSIGNMENT_START_PATTERN = re.compile(
+    r"(?:"
+    r"(?P<escaped_quote>\\[\"'])(?P<escaped_key>{identifier})"
+    r"(?P=escaped_quote)"
+    r"|(?P<quote>[\"'])(?P<quoted_key>{identifier})(?P=quote)"
+    r"|(?P<bare_key>(?<![A-Za-z0-9_-]){identifier})"
+    r")\s*(?P<separator>=|:)\s*".format(identifier=_IDENTIFIER)
 )
 _BEARER_PATTERN = re.compile(
     r"(?i)(\bBearer\s+)([A-Za-z0-9._~+/=-]+)"
@@ -37,30 +41,142 @@ def redact_secrets(value: str) -> str:
     if not isinstance(value, str):
         return value
 
-    redacted = _ASSIGNMENT_PATTERN.sub(
-        _redact_assignment,
-        value,
-    )
-    redacted = _JSON_ASSIGNMENT_PATTERN.sub(
-        r"\1\2[REDACTED]\4", redacted
-    )
+    redacted = _redact_assignments(value)
     redacted = _BEARER_PATTERN.sub(r"\1[REDACTED]", redacted)
     redacted = _JWT_PATTERN.sub("[REDACTED]", redacted)
     redacted = _OPENAI_TOKEN_PATTERN.sub("[REDACTED]", redacted)
     return _GITHUB_TOKEN_PATTERN.sub("[REDACTED]", redacted)
 
 
-def _redact_assignment(match: re.Match) -> str:
-    raw_value = match.group(2)
-    if (
-        len(raw_value) >= 2
-        and raw_value[0] in ("\"", "'")
-        and raw_value[-1] == raw_value[0]
-    ):
-        replacement = raw_value[0] + "[REDACTED]" + raw_value[-1]
-    else:
+def _identifier_components(value: str):
+    with_acronyms_split = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", value)
+    with_camel_split = re.sub(
+        r"([a-z0-9])([A-Z])", r"\1_\2", with_acronyms_split
+    )
+    return [
+        component.lower()
+        for component in re.split(r"[^A-Za-z0-9]+", with_camel_split)
+        if component
+    ]
+
+
+def _is_secret_key(value: str) -> bool:
+    return any(
+        component in _SECRET_COMPONENTS
+        for component in _identifier_components(value)
+    )
+
+
+def _redact_assignments(value: str) -> str:
+    pieces = []
+    copy_position = 0
+    search_position = 0
+    while True:
+        match = _ASSIGNMENT_START_PATTERN.search(value, search_position)
+        if match is None:
+            break
+        key = (
+            match.group("escaped_key")
+            or match.group("quoted_key")
+            or match.group("bare_key")
+        )
+        if not _is_secret_key(key):
+            search_position = match.end()
+            continue
+
+        end, replacement = _consume_assignment_value(
+            value,
+            match.end(),
+            match.group("separator"),
+        )
+        if replacement is None:
+            search_position = match.end()
+            continue
+        pieces.append(value[copy_position:match.end()])
+        pieces.append(replacement)
+        copy_position = end
+        search_position = end
+
+    if not pieces:
+        return value
+    pieces.append(value[copy_position:])
+    return "".join(pieces)
+
+
+def _consume_assignment_value(value: str, start: int, separator: str):
+    if start >= len(value) or value[start] in "\r\n":
+        return start, None
+
+    if value.startswith(('\\"', "\\'"), start):
+        delimiter = value[start:start + 2]
+        end = _backslash_quoted_end(value, start)
+        if end is None:
+            return _line_end(value, start), delimiter + "[REDACTED]"
+        return end, delimiter + "[REDACTED]" + delimiter
+
+    if value[start] in ("\"", "'"):
+        quote = value[start]
+        position = start + 1
+        while position < len(value):
+            character = value[position]
+            if character in "\r\n":
+                break
+            if character == "\\":
+                position += 2
+                continue
+            if character == quote:
+                return position + 1, quote + "[REDACTED]" + quote
+            position += 1
+        return _line_end(value, start), quote + "[REDACTED]"
+
+    bearer = re.match(
+        r"(?i)Bearer\s+[^\s,;}}\]\"']+", value[start:]
+    )
+    if bearer is not None:
         replacement = "[REDACTED]"
-    return match.group(1) + replacement
+        if separator == ":":
+            prefix = re.match(r"(?i)Bearer\s+", bearer.group(0)).group(0)
+            replacement = prefix + "[REDACTED]"
+        return start + bearer.end(), replacement
+
+    end = start
+    while end < len(value) and value[end] not in " \t\r\n,;}][\"'":
+        end += 1
+    if end == start:
+        return start, None
+    return end, "[REDACTED]"
+
+
+def _backslash_quoted_end(value: str, start: int):
+    quote = value[start + 1]
+    position = start + 2
+    while position < len(value):
+        if value[position] in "\r\n":
+            return None
+        if value[position] != quote:
+            position += 1
+            continue
+
+        backslashes = 0
+        before_quote = position - 1
+        while before_quote >= start and value[before_quote] == "\\":
+            backslashes += 1
+            before_quote -= 1
+        if backslashes % 4 == 1:
+            return position + 1
+        position += 1
+    return None
+
+
+def _line_end(value: str, start: int) -> int:
+    carriage_return = value.find("\r", start)
+    line_feed = value.find("\n", start)
+    candidates = [
+        position
+        for position in (carriage_return, line_feed)
+        if position != -1
+    ]
+    return min(candidates) if candidates else len(value)
 
 
 def redact_structure(value: Any) -> Any:
@@ -68,7 +184,7 @@ def redact_structure(value: Any) -> Any:
     if isinstance(value, dict):
         redacted = {}
         for key, item in value.items():
-            if isinstance(key, str) and _SECRET_KEY_PATTERN.fullmatch(key):
+            if isinstance(key, str) and _is_secret_key(key):
                 redacted[key] = "[REDACTED]"
             else:
                 redacted[key] = redact_structure(item)

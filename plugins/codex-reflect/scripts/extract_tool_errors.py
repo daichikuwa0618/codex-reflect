@@ -55,16 +55,16 @@ def find_session_files(project_dir: str = None, all_projects: bool = False) -> l
     for session_file in session_files:
         try:
             result = parse_transcript(session_file)
-        except (OSError, ValueError) as error:
+            if not result.supported or not result.cwd:
+                continue
+            cwd = os.path.normcase(
+                str(Path(result.cwd).expanduser().resolve())
+            )
+            if cwd == target:
+                matching.append(session_file)
+        except (OSError, ValueError, RuntimeError) as error:
             _warn_skipped_transcript(session_file, error)
             continue
-        if not result.supported or not result.cwd:
-            continue
-        cwd = os.path.normcase(
-            str(Path(result.cwd).expanduser().resolve())
-        )
-        if cwd == target:
-            matching.append(session_file)
     return matching
 
 
@@ -133,7 +133,7 @@ def main() -> int:
                 session_file,
                 project_specific_only=not args.include_all
             )
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, RuntimeError) as error:
             _warn_skipped_transcript(session_file, error)
             continue
         all_errors.extend(errors)

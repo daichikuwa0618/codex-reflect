@@ -276,6 +276,77 @@ class TestExtractToolErrors(unittest.TestCase):
         self.assertNotIn("TOKEN", warning)
         self.assertNotIn("must-not-be-logged", warning)
 
+    def test_project_scan_skips_unexpandable_cwd_and_keeps_valid_neighbors(self):
+        codex_home = Path(self.temp_dir) / "codex-home"
+        sessions = codex_home / "sessions"
+        sessions.mkdir(parents=True)
+        project = Path(self.temp_dir) / "project"
+        project.mkdir()
+        before = sessions / "a-valid.jsonl"
+        invalid_cwd = sessions / "b-invalid-cwd.jsonl"
+        after = sessions / "c-valid.jsonl"
+        self._write_session(before, ["first"], cwd=str(project))
+        self._write_session(
+            invalid_cwd,
+            ["must-not-be-logged"],
+            cwd="~definitely_missing_user",
+        )
+        self._write_session(after, ["second"], cwd=str(project))
+        stderr = StringIO()
+
+        with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}), redirect_stderr(stderr):
+            files = extract_tool_errors_script.find_session_files(
+                str(project), all_projects=False
+            )
+
+        self.assertEqual(files, [before.resolve(), after.resolve()])
+        warning = stderr.getvalue()
+        self.assertIn(str(invalid_cwd.name), warning)
+        self.assertIn("RuntimeError", warning)
+        self.assertNotIn("definitely_missing_user", warning)
+        self.assertNotIn("must-not-be-logged", warning)
+
+    def test_main_skips_recursion_error_and_keeps_valid_neighbors(self):
+        root = Path(self.temp_dir)
+        before = root / "a-valid.jsonl"
+        recursive = root / "b-recursive.jsonl"
+        after = root / "c-valid.jsonl"
+        self._write_session(before, ["Connection refused before"])
+        recursive.write_text(
+            '{"type":"session_meta","payload":{"id":"recursive"}}\n'
+            '{"type":"response_item","payload":'
+            '{"type":"custom_tool_call_output","output":'
+            + "[" * 2000
+            + '"deep-secret-value"'
+            + "]" * 2000
+            + "}}\n",
+            encoding="utf-8",
+        )
+        self._write_session(after, ["Connection refused after"])
+        stdout = StringIO()
+        stderr = StringIO()
+        argv = [
+            "extract_tool_errors.py",
+            str(before),
+            str(recursive),
+            str(after),
+            "--min-count",
+            "1",
+            "--json",
+        ]
+
+        with patch.object(sys, "argv", argv), redirect_stdout(stdout), redirect_stderr(stderr):
+            exit_code = extract_tool_errors_script.main()
+
+        self.assertEqual(exit_code, 0)
+        results = json.loads(stdout.getvalue())
+        self.assertEqual(results[0]["error_type"], "connection_refused")
+        self.assertEqual(results[0]["count"], 2)
+        warning = stderr.getvalue()
+        self.assertIn(str(recursive), warning)
+        self.assertIn("RecursionError", warning)
+        self.assertNotIn("deep-secret-value", warning)
+
 
 class TestAggregateToolErrors(unittest.TestCase):
     """Tests for aggregate_tool_errors function."""

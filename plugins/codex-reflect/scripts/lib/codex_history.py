@@ -55,15 +55,30 @@ def _metadata_value(metadata: Dict[str, Any], key: str) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _append_message(messages: List[str], seen: set, value: Any) -> None:
-    if not isinstance(value, str) or value in seen:
+def _append_message(
+    messages: List[str],
+    own_unmatched: Dict[str, int],
+    other_unmatched: Dict[str, int],
+    value: Any,
+) -> None:
+    if not isinstance(value, str):
         return
-    seen.add(value)
+    other_count = other_unmatched.get(value, 0)
+    if other_count:
+        if other_count == 1:
+            del other_unmatched[value]
+        else:
+            other_unmatched[value] = other_count - 1
+        return
     messages.append(redact_secrets(value))
+    own_unmatched[value] = own_unmatched.get(value, 0) + 1
 
 
 def _append_response_user_messages(
-    messages: List[str], seen: set, payload: Dict[str, Any]
+    messages: List[str],
+    response_unmatched: Dict[str, int],
+    event_unmatched: Dict[str, int],
+    payload: Dict[str, Any],
 ) -> None:
     if payload.get("type") != "message" or payload.get("role") != "user":
         return
@@ -73,7 +88,12 @@ def _append_response_user_messages(
     for item in content:
         if not isinstance(item, dict) or item.get("type") != "input_text":
             continue
-        _append_message(messages, seen, item.get("text"))
+        _append_message(
+            messages,
+            response_unmatched,
+            event_unmatched,
+            item.get("text"),
+        )
 
 
 def _append_custom_tool_output(outputs: List[str], payload: Dict[str, Any]) -> None:
@@ -117,7 +137,8 @@ def parse_transcript(path: Path) -> TranscriptResult:
         )
 
     messages: List[str] = []
-    seen_messages = set()
+    event_unmatched: Dict[str, int] = {}
+    response_unmatched: Dict[str, int] = {}
     outputs: List[str] = []
     issues: List[str] = []
     for record in records:
@@ -125,13 +146,27 @@ def parse_transcript(path: Path) -> TranscriptResult:
         if record_type not in KNOWN_RECORD_TYPES:
             issues.append("ignored unknown record type: {}".format(record_type))
             continue
+        if record_type == "turn_context":
+            event_unmatched.clear()
+            response_unmatched.clear()
+            continue
         payload = record.get("payload")
         if not isinstance(payload, dict):
             continue
         if record_type == "event_msg" and payload.get("type") == "user_message":
-            _append_message(messages, seen_messages, payload.get("message"))
+            _append_message(
+                messages,
+                event_unmatched,
+                response_unmatched,
+                payload.get("message"),
+            )
         elif record_type == "response_item":
-            _append_response_user_messages(messages, seen_messages, payload)
+            _append_response_user_messages(
+                messages,
+                response_unmatched,
+                event_unmatched,
+                payload,
+            )
             _append_custom_tool_output(outputs, payload)
 
     return TranscriptResult(
