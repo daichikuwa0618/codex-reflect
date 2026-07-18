@@ -34,6 +34,73 @@ SESSION_START_COMMAND = (
 
 
 class TestCodexPluginContract(unittest.TestCase):
+    def test_claude_runtime_manifests_are_removed(self):
+        for path in (
+            REPO_ROOT / ".claude-plugin",
+            REPO_ROOT / "commands",
+            REPO_ROOT / "hooks",
+            REPO_ROOT / "SKILL.md",
+            PLUGIN_ROOT / "scripts" / "legacy",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(path.exists(), f"obsolete runtime artifact: {path}")
+
+    def test_license_preserves_upstream_notice(self):
+        license_text = (REPO_ROOT / "LICENSE").read_text(encoding="utf-8")
+        self.assertIn("Copyright (c) 2025 Bayram Annakov", license_text)
+
+    def test_readme_documents_attribution_and_codex_gaps(self):
+        readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        for text in (
+            "BayramAnnakov/claude-reflect",
+            "Hook trust",
+            "transcript",
+            "Codex Memories",
+            "$CODEX_HOME/codex-reflect",
+            "$codex-reflect:reflect",
+            "macOS",
+            "Linux",
+            "Windows",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, readme)
+
+    def test_repository_guidance_and_ci_are_codex_native(self):
+        self.assertTrue((REPO_ROOT / "AGENTS.md").is_file())
+        self.assertFalse((REPO_ROOT / "CLAUDE.md").exists())
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "test.yml"
+        ).read_text(encoding="utf-8")
+        for text in (
+            "ubuntu-latest",
+            "macos-latest",
+            "windows-latest",
+            "'3.8'",
+            "'3.11'",
+            "plugins/codex-reflect/scripts/session_start_reminder.py",
+            ".agents/plugins/marketplace.json",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, workflow)
+
+    def test_plugin_runtime_has_no_claude_dependencies(self):
+        forbidden = (
+            "CLAUDE_PLUGIN_ROOT",
+            "CLAUDE_PLUGIN_DATA",
+            "~/.claude",
+            "claude -p",
+            ".claude-plugin",
+        )
+        for path in PLUGIN_ROOT.rglob("*"):
+            if not path.is_file() or path.suffix not in {
+                ".json", ".md", ".py", ".sh"
+            }:
+                continue
+            text = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                with self.subTest(path=path, token=token):
+                    self.assertNotIn(token, text)
+
     def test_manifest_and_skill_discovery_contract(self):
         self.assertTrue(MANIFEST_PATH.is_file(), f"missing {MANIFEST_PATH}")
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
@@ -71,6 +138,8 @@ class TestCodexPluginContract(unittest.TestCase):
             "final confirmation",
             "AGENTS.md",
             "queue",
+            "--dedupe",
+            "--organize",
         ):
             with self.subTest(keyword=keyword):
                 self.assertIn(keyword, body)

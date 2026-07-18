@@ -1,411 +1,195 @@
-# claude-reflect
+# codex-reflect
 
-[![GitHub stars](https://img.shields.io/github/stars/BayramAnnakov/claude-reflect?style=flat-square)](https://github.com/BayramAnnakov/claude-reflect/stargazers)
-[![Version](https://img.shields.io/badge/version-2.6.0-blue?style=flat-square)](https://github.com/BayramAnnakov/claude-reflect/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-160%20passing-brightgreen?style=flat-square)](https://github.com/BayramAnnakov/claude-reflect/actions)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square)](https://github.com/BayramAnnakov/claude-reflect#platform-support)
+[![Version](https://img.shields.io/badge/version-4.0.0--rc.1-blue?style=flat-square)](plugins/codex-reflect/.codex-plugin/plugin.json)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square)](.github/workflows/test.yml)
 
-A self-learning system for Claude Code that captures corrections and discovers workflow patterns — turning them into permanent memory and reusable skills.
+Codex で受けた訂正・肯定・明示的な記憶指示を queue に捕捉し、人間のレビューを経て `AGENTS.md` または再利用可能な Codex Skill に反映する Plugin です。履歴から反復 workflow を発見することもできます。
 
-## What it does
+## Fork とライセンス
 
-### 1. Learn from Corrections
+このリポジトリは [BayramAnnakov/claude-reflect](https://github.com/BayramAnnakov/claude-reflect) を Codex 専用に fork したものです。upstream の優れた二段階設計、pattern detection、human review、Skill discovery を引き継ぎ、MIT License の条件に従って Codex Plugin、Hooks、`AGENTS.md`、Codex Skills、Codex session history 向けに変更しています。
 
-When you correct Claude ("no, use gpt-5.1 not gpt-5"), it remembers forever.
+upstream の著作権表示と MIT License 本文は [LICENSE](LICENSE) に保持されています。
 
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  You correct    │ ──► │  Hook captures  │ ──► │  /reflect adds  │
-│  Claude Code    │     │  to queue       │     │  to CLAUDE.md   │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-      (automatic)            (automatic)            (manual review)
-```
+## 仕組み
 
-### 2. Discover Workflow Patterns (NEW in v2)
-
-Analyzes your session history to find repeating tasks that could become reusable commands.
-
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  Your past      │ ──► │ /reflect-skills │ ──► │   Generates     │
-│  sessions       │     │ finds patterns  │     │   /commands     │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-    (68 sessions)         (AI-powered)            (you approve)
+```text
+Codex user prompt
+  -> UserPromptSubmit Hook の高速 heuristic
+  -> $CODEX_HOME/codex-reflect の project queue
+  -> $codex-reflect:reflect の semantic validation と人間レビュー
+  -> final confirmation
+  -> AGENTS.md または writable Skill
 ```
 
-Example: You've asked "review my productivity" 12 times → suggests creating `/daily-review`
+Hook は model を起動せず、correction、positive feedback、`remember:` を検出します。永続 guidance は自動適用されません。`reflect` が候補、配置先、exact diff を提示し、利用者の final confirmation 後だけ書き込みます。適用に成功した項目だけが queue から除去されます。
 
-## Key Features
+## 必要条件
 
-| Feature | What it does |
-|---------|--------------|
-| **Permanent Memory** | Corrections sync to CLAUDE.md — Claude remembers across sessions |
-| **Skill Discovery** | Finds repeating patterns in your history → generates commands |
-| **Multi-language** | AI understands corrections in any language |
-| **Skill Improvement** | Corrections during `/deploy` improve the deploy skill itself |
+- Plugin をサポートする現行 stable Codex CLI / Codex app
+- Python 3.8 以上
+- Plugin Hooks を利用する project / repository の trust
 
-## Installation
+## Marketplace からのインストール
+
+ローカル clone から追加する場合:
 
 ```bash
-# Add the marketplace
-claude plugin marketplace add bayramannakov/claude-reflect
-
-# Install the plugin
-claude plugin install claude-reflect@claude-reflect-marketplace
-
-# IMPORTANT: Restart Claude Code to activate the plugin
+git clone https://github.com/daichikuwa0618/codex-reflect.git
+cd codex-reflect
+codex plugin marketplace add .
+codex plugin add codex-reflect@codex-reflect-marketplace
+codex plugin list
 ```
 
-After installation, **restart Claude Code** (exit and reopen). Then hooks auto-configure and commands are ready.
-
-> **First run?** When you run `/reflect` for the first time, you'll be prompted to scan your past sessions for learnings.
-
-### Prerequisites
-
-- [Claude Code](https://claude.ai/code) CLI installed
-- Python 3.6+ (included on most systems)
-
-### Platform Support
-
-- **macOS**: Fully supported
-- **Linux**: Fully supported
-- **Windows**: Fully supported (native Python, no WSL required)
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `/reflect` | Process queued learnings with human review |
-| `/reflect --scan-history` | Scan ALL past sessions for missed learnings |
-| `/reflect --dry-run` | Preview changes without applying |
-| `/reflect --targets` | Show detected config files (CLAUDE.md, AGENTS.md) |
-| `/reflect --review` | Show queue with confidence scores and decay status |
-| `/reflect --dedupe` | Find and consolidate similar entries in CLAUDE.md |
-| `/reflect --include-tool-errors` | Include tool execution errors in scan |
-| `/reflect-skills` | Discover skill candidates from repeating patterns |
-| `/reflect-skills --days N` | Analyze last N days (default: 14) |
-| `/reflect-skills --project <path>` | Analyze specific project |
-| `/reflect-skills --all-projects` | Scan all projects for cross-project patterns |
-| `/reflect-skills --dry-run` | Preview patterns without generating skill files |
-| `/skip-reflect` | Discard all queued learnings |
-| `/view-queue` | View pending learnings without processing |
-
-## How It Works
-
-![claude-reflect in action](assets/reflect-demo.jpg)
-
-### Two-Stage Process
-
-**Stage 1: Capture (Automatic)**
-
-Hooks run automatically to detect and queue corrections:
-
-| Hook | Trigger | Purpose |
-|------|---------|---------|
-| `session_start_reminder.py` | Session start | Shows pending learnings reminder |
-| `capture_learning.py` | Every prompt | Detects correction patterns and queues them |
-| `check_learnings.py` | Before compaction | Backs up queue and informs user |
-| `post_commit_reminder.py` | After git commit | Reminds to run /reflect after completing work |
-
-**Stage 2: Process (Manual)**
-
-Run `/reflect` to review and apply queued learnings to CLAUDE.md.
-
-### Detection Methods
-
-Claude-reflect uses a **hybrid detection approach**:
-
-**1. Regex patterns (real-time capture)**
-
-Fast pattern matching during sessions detects:
-
-- **Corrections**: `"no, use X"` / `"don't use Y"` / `"actually..."` / `"that's wrong"`
-- **Positive feedback**: `"Perfect!"` / `"Exactly right"` / `"Great approach"`
-- **Explicit markers**: `"remember:"` — highest confidence
-
-**2. Semantic AI validation (during /reflect)**
-
-When you run `/reflect`, an AI-powered semantic filter:
-- **Multi-language support** — understands corrections in any language
-- **Better accuracy** — filters out false positives from regex
-- **Cleaner learnings** — extracts concise, actionable statements
-
-Example: A Spanish correction like `"no, usa Python"` is correctly detected even though it doesn't match English patterns.
-
-Each captured learning has a **confidence score** (0.60-0.95). The final score is the higher of regex and semantic confidence.
-
-### Human Review
-
-When you run `/reflect`, Claude presents a summary table with options:
-- **Apply** - Accept the learning and add to CLAUDE.md
-- **Edit before applying** - Modify the learning text first
-- **Skip** - Don't apply this learning
-
-### Multi-Target Sync
-
-Approved learnings are synced to:
-- `~/.claude/CLAUDE.md` (global - applies to all projects)
-- `./CLAUDE.md` (project-specific)
-- `./**/CLAUDE.md` (subdirectories - auto-discovered)
-- `./.claude/commands/*.md` (skill files - when correction relates to a skill)
-- `AGENTS.md` (if exists - works with Codex, Cursor, Aider, Jules, Zed, Factory)
-
-Run `/reflect --targets` to see which files will be updated.
-
-### Skill Discovery
-
-Run `/reflect-skills` to discover repeating patterns in your sessions that could become reusable skills:
-
-```
-/reflect-skills                 # Analyze current project (last 14 days)
-/reflect-skills --days 30       # Analyze last 30 days
-/reflect-skills --all-projects  # Analyze all projects (slower)
-/reflect-skills --dry-run       # Preview patterns without generating files
-```
-
-**Features:**
-- **AI-powered detection** — uses reasoning, not regex, to find patterns
-- **Semantic similarity** — detects same intent across different phrasings
-- **Project-aware** — groups patterns by project, suggests correct location
-- **Smart assignment** — asks where each skill should go (project vs global)
-- **Generates skill files** — creates draft skills in `.claude/commands/`
-
-**How it works:**
-
-The skill discovers patterns by analyzing your session history semantically. Different phrasings of the same intent are recognized:
-
-```
-Session 1: "review my productivity for today"
-Session 2: "how was my focus this afternoon?"
-Session 3: "check my ActivityWatch data"
-Session 4: "evaluate my work hours"
-```
-
-Claude reasons: *"These 4 requests have the same intent - reviewing productivity data. The workflow is: fetch time tracking data → categorize activities → calculate focus score. This is a strong candidate for /daily-review."*
-
-**Example output:**
-```
-════════════════════════════════════════════════════════════
-SKILL CANDIDATES DISCOVERED
-════════════════════════════════════════════════════════════
-
-Found 2 potential skills from analyzing 68 sessions:
-
-1. /daily-review (High) — from my-productivity-tools
-   → Review productivity using time tracking data
-   Evidence: 15 similar requests
-   Corrections learned: "use local timezone", "chat apps can be work"
-
-2. /deploy-app (High) — from my-webapp
-   → Deploy application with pre-flight checks
-   Evidence: 10 similar requests
-   Corrections learned: "always run tests first"
-
-════════════════════════════════════════════════════════════
-
-Which skills should I generate?
-> [1] /daily-review, [2] /deploy-app
-
-Where should each skill be created?
-┌──────────────────────┬─────────────────────────┐
-│ /daily-review        │ my-productivity-tools   │
-│ /deploy-app          │ my-webapp               │
-└──────────────────────┴─────────────────────────┘
-
-Skills created:
-  ~/projects/my-productivity-tools/.claude/commands/daily-review.md
-  ~/projects/my-webapp/.claude/commands/deploy-app.md
-```
-
-**Generated skill file example:**
-
-```markdown
----
-description: Deploy application with pre-flight checks
-allowed-tools: Bash, Read, Write
----
-
-## Context
-Deployment scripts in ./scripts/deploy/
-
-## Your Task
-Deploy the application to the specified environment.
-
-### Steps
-1. Run test suite
-2. Build production assets
-3. Deploy to target environment
-4. Verify deployment health
-
-### Guardrails
-- Always run tests before deploying
-- Never deploy to production on Fridays
-- Check for pending migrations
-
----
-*Generated by /reflect-skills from 10 session patterns*
-```
-
-### Skill Improvement Routing
-
-When you correct Claude while using a skill (e.g., `/deploy`), the correction can be routed back to the skill file itself:
-
-```
-User: /deploy
-Claude: [deploys without running tests]
-User: "no, always run tests before deploying"
-
-→ /reflect detects this relates to /deploy
-→ Offers to add learning to .claude/commands/deploy.md
-→ Skill file updated with new step
-```
-
-This makes skills smarter over time, not just CLAUDE.md.
-
-## Upgrading
-
-### From v2.0.x or earlier
-
-If you see errors like "Duplicate hooks file detected" or "No such file or directory" after updating, you need to clear the plugin cache. This is due to known Claude Code caching issues:
-- [#14061](https://github.com/anthropics/claude-code/issues/14061) - `/plugin update` doesn't invalidate cache
-- [#15369](https://github.com/anthropics/claude-code/issues/15369) - Uninstall doesn't clear cached files
+Git marketplace として追加する場合:
 
 ```bash
-# 1. Uninstall the plugin
-claude plugin uninstall claude-reflect@claude-reflect-marketplace
-
-# 2. Clear both caches (required!)
-rm -rf ~/.claude/plugins/marketplaces/claude-reflect-marketplace
-rm -rf ~/.claude/plugins/cache/claude-reflect-marketplace
-
-# 3. Exit Claude Code completely (restart terminal or close app)
-
-# 4. Reinstall
-claude plugin install claude-reflect@claude-reflect-marketplace
+codex plugin marketplace add daichikuwa0618/codex-reflect --ref main
+codex plugin add codex-reflect@codex-reflect-marketplace
 ```
 
-### Standard Update
+### Hook trust
 
-For normal updates (when no cache issues):
+インストール後、新しい Codex task で `/hooks` を開き、次の 4 Hook groups の exact definitions を確認して trust してください。
+
+- `UserPromptSubmit`: correction / positive / explicit feedback の捕捉
+- `PreCompact`: current-project queue の backup
+- `PostToolUse` (`Bash`): commit 後の review reminder
+- `SessionStart`: pending queue と capability gap の表示
+
+queue が作成されない場合は「学習が無い」と判断せず、まず `/hooks` と project trust を確認してください。Plugin は Hook trust を自動回避しません。
+
+## Skills
+
+Skill 名は fork 元に準拠しています。Codex では namespace 付きで呼び出します。
+
+| Skill | 用途 |
+|---|---|
+| `$codex-reflect:reflect` | queue を semantic validation し、routing と human review を経て guidance を適用 |
+| `$codex-reflect:reflect-skills` | 反復する multi-step workflow を履歴から発見し、承認済み Skill だけを生成 |
+| `$codex-reflect:view-queue` | current-project queue を confidence、pattern、相対時刻付きで表示 |
+| `$codex-reflect:skip-reflect` | 対象を表示し、確認後に current-project queue を空にする |
+
+### `reflect`
+
+```text
+$codex-reflect:reflect
+$codex-reflect:reflect --dry-run
+$codex-reflect:reflect --scan-history --days 30
+$codex-reflect:reflect --targets
+$codex-reflect:reflect --review
+$codex-reflect:reflect --dedupe
+$codex-reflect:reflect --organize
+$codex-reflect:reflect --include-tool-errors
+$codex-reflect:reflect --model <model>
+```
+
+- `--dry-run`: proposal のみ。選択質問、queue 更新、target 書き込みを行いません。
+- `--scan-history`: active / archived transcript を opt-in で走査します。
+- `--days N`: 履歴期間を N 日に制限します。
+- `--targets`: 適用可能な `AGENTS.md` / Skill authoring target を表示します。
+- `--review`: decay 済み候補も含めます。
+- `--dedupe`: 重複候補を提示します。
+- `--organize`: `AGENTS.md` hierarchy、Skills、queue 間の整理案を提示します。
+- `--include-tool-errors`: 観測できた project-specific tool error を候補に含めます。
+- `--model`: semantic subprocess の model を明示します。省略時は現在の Codex default を使用します。
+
+### `reflect-skills`
+
+```text
+$codex-reflect:reflect-skills
+$codex-reflect:reflect-skills --days 30
+$codex-reflect:reflect-skills --project <path>
+$codex-reflect:reflect-skills --all-projects
+$codex-reflect:reflect-skills --dry-run
+```
+
+既定は current project の直近 14 日です。同じ intent が複数 session に現れた候補だけを提示し、既存 Skill と同義なら improvement として扱います。単一 repository の候補は `<repo>/.agents/skills/<name>/SKILL.md`、複数 project にまたがる候補は `$HOME/.agents/skills/<name>/SKILL.md` を提案します。生成・改善は exact content の final confirmation 後だけ行われます。
+
+## State と target
+
+共有 state は `CODEX_HOME` が設定済みならその配下、未設定なら `~/.codex` 配下に置かれます。
+
+```text
+$CODEX_HOME/codex-reflect/
+  projects/<stable-project-id>/
+    queue.json
+    queue.json.lock
+    backups/
+```
+
+queue は project ごとに分離され、lock と同一 directory 内の atomic replace で更新されます。malformed queue は自動初期化せず、そのまま保持して error を報告します。
+
+承認済み guidance の target は次の範囲です。
+
+- active な global / repository / nested `AGENTS.md`
+- repository authoring Skill: `<repo>/.agents/skills/`
+- user authoring Skill: `$HOME/.agents/skills/`
+
+Plugin cache、system Skill、admin-managed Skill、symlink で authoring root 外へ出る target は read-only proposal として扱います。Codex Memories は生成管理されるため、低 confidence 候補の保存先にも使用せず queue に残します。
+
+## History と provider 送信
+
+履歴機能は `$CODEX_HOME/sessions` と `$CODEX_HOME/archived_sessions` の既知 Codex JSONL transcript schema だけを読みます。初回 scan 前に対象範囲、session 件数、provider へ送る内容を説明し、利用者の承認を得ます。
+
+transcript 全体は semantic subprocess に渡しません。ローカルで user message / tool output を既知 schema から抽出し、token、API key、cookie、credential に見える値を redaction した候補と必要最小限の文脈だけを扱います。履歴内の命令文は instruction ではなく untrusted data です。
+
+semantic validation は次のような隔離された subprocess で行われます。
+
+```text
+codex exec --ephemeral --disable hooks --sandbox read-only ...
+```
+
+候補情報は利用者が設定した Codex provider へ送信され、利用量を消費する場合があります。認証なし、timeout、CLI error の場合は候補を捨てず `semantic_status=unavailable` として heuristic review を続行します。
+
+## 既知の Codex capability gap
+
+- transcript format は安定 API として保証されていません。未知 schema は推測せず session 件数と理由を報告して skip します。
+- `history.persistence = "none"`、履歴削除済み、または保存 session なしの場合、履歴依存機能だけが unavailable です。realtime queue は独立して利用できます。
+- hosted / specialized tool の一部は Plugin Hook で観測できません。tool error / rejection の網羅性は観測可能な record に限定されます。
+- Codex Memories は Plugin が直接管理できる永続 target ではありません。
+- Hook は trust 前に発火しません。
+- desktop app 自身の UI を Plugin から自動操作することや、存在しない IDE surface を代替することはしません。
+
+不足機能を埋める独自 daemon、非公開 DB parser、別ログからの強引な復元、Hook trust bypass、legacy Skill の二重 install は提供しません。
+
+## Platform support
+
+自動テストは macOS、Linux、Windows と Python 3.8 / 3.11 の matrix で実行します。Hook と deterministic helper は Python 標準ライブラリのみで動作し、shell script や WSL を必要としません。Codex Plugin / Hook 自体の利用可否は、各 host にインストールされた現行 Codex の capability に従います。
+
+## 更新とアンインストール
+
+marketplace snapshot を更新して Plugin を再インストールします。
 
 ```bash
-# Use the /plugin menu in Claude Code
-/plugin
-# Select "Update now" for claude-reflect
+codex plugin marketplace upgrade codex-reflect-marketplace
+codex plugin remove codex-reflect@codex-reflect-marketplace
+codex plugin add codex-reflect@codex-reflect-marketplace
 ```
 
-## Uninstall
+アンインストール:
 
 ```bash
-claude plugin uninstall claude-reflect@claude-reflect-marketplace
+codex plugin remove codex-reflect@codex-reflect-marketplace
 ```
 
-## File Structure
+uninstall は既に承認・生成された `AGENTS.md` と user / repository Skills を削除しません。旧 runtime state の自動 import は行いません。
 
-```
-claude-reflect/
-├── .claude-plugin/
-│   └── plugin.json         # Plugin manifest (auto-registers hooks)
-├── commands/
-│   ├── reflect.md          # Main command
-│   ├── reflect-skills.md   # Skill discovery
-│   ├── skip-reflect.md     # Discard queue
-│   └── view-queue.md       # View queue
-├── hooks/
-│   └── hooks.json          # Auto-configured when plugin installed
-├── scripts/
-│   ├── lib/
-│   │   ├── reflect_utils.py      # Shared utilities
-│   │   └── semantic_detector.py  # AI-powered semantic analysis
-│   ├── capture_learning.py       # Hook: detect corrections
-│   ├── check_learnings.py        # Hook: pre-compact check
-│   ├── post_commit_reminder.py   # Hook: post-commit reminder
-│   ├── compare_detection.py      # Compare regex vs semantic detection
-│   ├── extract_session_learnings.py
-│   ├── extract_tool_errors.py
-│   ├── extract_tool_rejections.py
-│   └── legacy/                   # Bash scripts (deprecated)
-├── tests/                  # Test suite
-└── SKILL.md                # Skill context for Claude
-```
-
-## Features
-
-### Historical Scan
-
-First time using claude-reflect? Run:
+## Development
 
 ```bash
-/reflect --scan-history
+python -m unittest discover -s tests -v
+python -m pytest tests/ -v
+python -m json.tool .agents/plugins/marketplace.json
+python -m json.tool plugins/codex-reflect/.codex-plugin/plugin.json
+python -m json.tool plugins/codex-reflect/hooks/hooks.json
+git diff --check
 ```
 
-This scans all your past sessions for corrections you made, so you don't lose learnings from before installation.
-
-### Smart Filtering
-
-Claude filters out:
-- Questions (not corrections)
-- One-time task instructions
-- Context-specific requests
-- Vague/non-actionable feedback
-
-Only reusable learnings are kept.
-
-### Duplicate Detection
-
-Before adding a learning, existing CLAUDE.md content is checked. If similar content exists, you can:
-- Merge with existing entry
-- Replace the old entry
-- Skip the duplicate
-
-### Semantic Deduplication
-
-Over time, CLAUDE.md can accumulate similar entries. Run `/reflect --dedupe` to:
-- Find semantically similar entries (even with different wording)
-- Propose consolidated versions
-- Clean up redundant learnings
-
-Example:
-```
-Before:
-  - Use gpt-5.1 for complex tasks
-  - Prefer gpt-5.1 for reasoning
-  - gpt-5.1 is better for hard problems
-
-After:
-  - Use gpt-5.1 for complex reasoning tasks
-```
-
-## Tips
-
-1. **Use explicit markers** for important learnings:
-   ```
-   remember: always use venv for Python projects
-   ```
-
-2. **Run /reflect after git commits** - The hook reminds you, but make it a habit
-
-3. **Historical scan on new machines** - When setting up a new dev environment:
-   ```
-   /reflect --scan-history --days 90
-   ```
-
-4. **Project vs Global** - Model names and general patterns go global; project-specific conventions stay in project CLAUDE.md
-
-5. **Discover skills monthly** - Run `/reflect-skills --days 30` monthly to find automation opportunities you might have missed
-
-6. **Skills get smarter** - When you correct Claude during a skill, that correction can be routed back to the skill file itself via `/reflect`
-
-7. **Extend session retention** - Claude Code deletes local sessions after 30 days by default. Since claude-reflect relies on session history for `/reflect --scan-history` and `/reflect-skills`, extend this in `~/.claude/settings.json`:
-   ```json
-   { "cleanupPeriodDays": 99999 }
-   ```
-
-## Contributing
-
-Pull requests welcome! Please read the contributing guidelines first.
+詳細は [AGENTS.md](AGENTS.md)、配布は [DISTRIBUTION.md](DISTRIBUTION.md)、release 手順は [RELEASING.md](RELEASING.md) を参照してください。
 
 ## License
 
-MIT
+[MIT License](LICENSE)。Copyright (c) 2025 Bayram Annakov の表示を含みます。

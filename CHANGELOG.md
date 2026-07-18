@@ -1,9 +1,32 @@
 # Changelog
 
-All notable changes to claude-reflect will be documented in this file.
+All notable changes to codex-reflect and its upstream history are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [4.0.0-rc.1] - 2026-07-18
+
+### Added
+- Codex Plugin marketplace package with fork-original `reflect`, `reflect-skills`, `view-queue`, and `skip-reflect` Skill names.
+- Codex-native Hooks for realtime capture, pre-compact backup, post-commit reminders, and capability-aware session start diagnostics.
+- Project-scoped atomic state under `$CODEX_HOME/codex-reflect`.
+- Known-schema active and archived Codex transcript parsing with secret redaction and safe unknown-schema reporting.
+- Isolated `codex exec` semantic validation with structured output schemas and graceful fallback.
+- `AGENTS.md` hierarchy and repository/user Skill routing with read-only protection for managed targets.
+
+### Changed
+- Replaced upstream runtime manifests, command bundle, history paths, semantic CLI, and guidance targets with Codex-native equivalents.
+- Made history scanning opt-in and documented configured-provider data transfer.
+
+### Removed
+- Legacy runtime manifests, shell scripts, old command files, old state migration, and direct generated-memory integration.
+
+### Known limitations
+- Some hosted or specialized tools are not observable through Plugin Hooks.
+- Unknown transcript schemas are skipped rather than guessed.
+- Codex Memories are not a writable Plugin target.
+- Desktop self-control and an unavailable IDE surface are not replaced with custom workarounds.
 
 ## [3.1.0] - 2026-03-16
 

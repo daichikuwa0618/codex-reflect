@@ -1,1 +1,1 @@
-"""Claude-reflect shared utilities."""
+"""codex-reflect shared utilities."""

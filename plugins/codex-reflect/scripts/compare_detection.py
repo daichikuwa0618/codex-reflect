@@ -2,11 +2,11 @@
 """Compare regex vs semantic detection on real session data.
 
 This script runs both regex and semantic detection on user messages from
-Claude Code session files and generates a comparison report.
+supported Codex session files and generates a comparison report.
 
 Usage:
     python scripts/compare_detection.py [session_files...]
-    python scripts/compare_detection.py ~/.claude/projects/*/session*.jsonl
+    python scripts/compare_detection.py <session-file.jsonl>
     python scripts/compare_detection.py --project .  # Current project sessions
 
 Options:
@@ -17,17 +17,18 @@ Options:
     --output FILE    Write report to file instead of stdout
 """
 import argparse
-import json
-import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Any, Dict, List
 
 # Add lib to path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from lib.reflect_utils import detect_patterns, extract_user_messages
+from lib.codex_history import list_session_files, parse_transcript
 from lib.semantic_detector import semantic_analyze
+from lib.target_resolver import TargetResolver
+
 
 # Colors for terminal output
 class Colors:
@@ -44,26 +45,19 @@ class Colors:
 
 
 def find_project_sessions(project_path: str) -> List[Path]:
-    """Find session files for a project."""
-    project_path = os.path.abspath(project_path)
-    project_name = os.path.basename(project_path)
-
-    claude_projects = Path.home() / ".claude" / "projects"
-    if not claude_projects.exists():
-        return []
-
-    # Try to find matching project folder
-    for folder in claude_projects.iterdir():
-        if project_name.lower() in folder.name.lower():
-            return list(folder.glob("*.jsonl"))
-
-    # Try with hyphens instead of underscores
-    project_name_hyphen = project_name.replace('_', '-')
-    for folder in claude_projects.iterdir():
-        if project_name_hyphen.lower() in folder.name.lower():
-            return list(folder.glob("*.jsonl"))
-
-    return []
+    """Find supported active and archived sessions for one repository."""
+    target = TargetResolver.repository_root(project_path)
+    sessions = []
+    for path in list_session_files():
+        try:
+            transcript = parse_transcript(path)
+        except (OSError, ValueError, RuntimeError):
+            continue
+        if not transcript.supported or not transcript.cwd:
+            continue
+        if TargetResolver.repository_root(transcript.cwd) == target:
+            sessions.append(path)
+    return sessions
 
 
 def analyze_message(text: str, use_semantic: bool = True) -> Dict[str, Any]:
@@ -203,7 +197,7 @@ def generate_report(categories: Dict[str, List], verbose: bool = False) -> str:
         ("Regex only (potential FP)", len(categories["regex_only"]), "Regex detected, semantic rejected"),
         ("Semantic only (new!)", len(categories["semantic_only"]), "Semantic found, regex missed"),
         ("Confidence differs", len(categories["confidence_diff"]), "Both detect, scores differ >0.2"),
-        ("Semantic unavailable", len(categories["semantic_error"]), "Claude CLI error/timeout"),
+        ("Semantic unavailable", len(categories["semantic_error"]), "Codex CLI error/timeout"),
     ]
 
     for name, count, desc in rows:
@@ -311,7 +305,7 @@ def main():
 
     if not session_files:
         print("No session files specified. Usage:")
-        print("  python scripts/compare_detection.py ~/.claude/projects/*/*.jsonl")
+        print("  python scripts/compare_detection.py <session-file.jsonl>")
         print("  python scripts/compare_detection.py --project .")
         sys.exit(1)
 

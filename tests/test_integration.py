@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Integration tests for claude-reflect scripts.
+"""Integration tests for codex-reflect scripts.
 
-These tests verify that both bash and Python versions produce the same results.
+These tests verify the cross-platform Python Hook and helper entrypoints.
 Run with: python -m pytest tests/test_integration.py -v
 """
 import json
@@ -13,10 +13,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-# Skip bash tests on Windows
-IS_WINDOWS = sys.platform == 'win32'
-skip_on_windows = unittest.skipIf(IS_WINDOWS, "Bash scripts not available on Windows")
-
 # Script locations
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLUGIN_ROOT = REPO_ROOT / "plugins" / "codex-reflect"
@@ -25,13 +21,6 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from lib.codex_paths import get_project_id
 import check_learnings
 
-BASH_SCRIPTS = {
-    "check_learnings": SCRIPTS_DIR / "legacy" / "check-learnings.sh",
-    "post_commit_reminder": SCRIPTS_DIR / "legacy" / "post-commit-reminder.sh",
-    "capture_learning": SCRIPTS_DIR / "legacy" / "capture-learning.sh",
-    "extract_session_learnings": SCRIPTS_DIR / "legacy" / "extract-session-learnings.sh",
-    "extract_tool_rejections": SCRIPTS_DIR / "legacy" / "extract-tool-rejections.sh",
-}
 PYTHON_SCRIPTS = {
     "session_start_reminder": SCRIPTS_DIR / "session_start_reminder.py",
     "check_learnings": SCRIPTS_DIR / "check_learnings.py",
@@ -40,19 +29,6 @@ PYTHON_SCRIPTS = {
     "extract_session_learnings": SCRIPTS_DIR / "extract_session_learnings.py",
     "extract_tool_rejections": SCRIPTS_DIR / "extract_tool_rejections.py",
 }
-
-
-def run_bash_script(script_path: Path, stdin: str = "", args: list = None) -> tuple:
-    """Run a bash script and return (stdout, stderr, returncode)."""
-    cmd = ["bash", str(script_path)] + (args or [])
-    result = subprocess.run(
-        cmd,
-        input=stdin,
-        capture_output=True,
-        text=True,
-        cwd=str(SCRIPTS_DIR),
-    )
-    return result.stdout, result.stderr, result.returncode
 
 
 def run_python_script(
@@ -653,29 +629,6 @@ class TestExtractSessionLearnings(unittest.TestCase):
             for entry in entries:
                 f.write(json.dumps(entry) + "\n")
 
-    @skip_on_windows
-    def test_bash_extracts_user_messages(self):
-        """Test bash script extracts user messages."""
-        self._create_session_file([
-            {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "Hello world"}]
-                }
-            },
-            {
-                "type": "assistant",
-                "message": {"content": "Response"}
-            },
-        ])
-
-        stdout, stderr, code = run_bash_script(
-            BASH_SCRIPTS["extract_session_learnings"],
-            args=[str(self.session_file)]
-        )
-        self.assertEqual(code, 0)
-        self.assertIn("Hello world", stdout)
-
     def test_python_extracts_user_messages(self):
         """Test Python script extracts confirmed Codex user-message shapes."""
         self._create_session_file([
@@ -695,33 +648,6 @@ class TestExtractSessionLearnings(unittest.TestCase):
         )
         self.assertEqual(code, 0)
         self.assertIn("Hello world", stdout)
-
-    @skip_on_windows
-    def test_bash_skips_meta_messages(self):
-        """Test bash script skips isMeta messages."""
-        self._create_session_file([
-            {
-                "type": "user",
-                "isMeta": True,
-                "message": {
-                    "content": [{"type": "text", "text": "Meta message"}]
-                }
-            },
-            {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "Regular message"}]
-                }
-            },
-        ])
-
-        stdout, stderr, code = run_bash_script(
-            BASH_SCRIPTS["extract_session_learnings"],
-            args=[str(self.session_file)]
-        )
-        self.assertEqual(code, 0)
-        self.assertNotIn("Meta message", stdout)
-        self.assertIn("Regular message", stdout)
 
     def test_python_skips_meta_messages(self):
         """Test Python script ignores non-user Codex response items."""
@@ -752,32 +678,6 @@ class TestExtractSessionLearnings(unittest.TestCase):
         self.assertNotIn("Meta message", stdout)
         self.assertIn("Regular message", stdout)
 
-    @skip_on_windows
-    def test_bash_corrections_only_flag(self):
-        """Test bash script --corrections-only flag."""
-        self._create_session_file([
-            {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "Hello world"}]
-                }
-            },
-            {
-                "type": "user",
-                "message": {
-                    "content": [{"type": "text", "text": "no, use Python"}]
-                }
-            },
-        ])
-
-        stdout, stderr, code = run_bash_script(
-            BASH_SCRIPTS["extract_session_learnings"],
-            args=[str(self.session_file), "--corrections-only"]
-        )
-        self.assertEqual(code, 0)
-        self.assertNotIn("Hello world", stdout)
-        self.assertIn("no, use Python", stdout)
-
     def test_python_corrections_only_flag(self):
         """Test Python script --corrections-only flag."""
         self._create_session_file([
@@ -807,15 +707,6 @@ class TestExtractSessionLearnings(unittest.TestCase):
         self.assertNotIn("Hello world", stdout)
         self.assertIn("no, use Python", stdout)
 
-    @skip_on_windows
-    def test_bash_nonexistent_file(self):
-        """Test bash script handles nonexistent file."""
-        stdout, stderr, code = run_bash_script(
-            BASH_SCRIPTS["extract_session_learnings"],
-            args=["/nonexistent/file.jsonl"]
-        )
-        self.assertNotEqual(code, 0)  # Should fail
-
     def test_python_nonexistent_file(self):
         """Test Python script handles nonexistent file."""
         stdout, stderr, code = run_python_script(
@@ -826,12 +717,10 @@ class TestExtractSessionLearnings(unittest.TestCase):
 
 
 class TestCapturePatternEquivalence(unittest.TestCase):
-    """Tests to verify bash and Python capture the same patterns."""
-
-    # These tests ensure the Python pattern detection matches bash behavior
+    """Tests that preserve the upstream capture pattern behavior."""
 
     def test_remember_pattern(self):
-        """Test 'remember:' is detected by both versions."""
+        """Test that the upstream 'remember:' behavior is preserved."""
         test_messages = [
             "remember: always use gpt-5.1",
             "Remember: use async/await",
@@ -844,7 +733,7 @@ class TestCapturePatternEquivalence(unittest.TestCase):
                 pass  # Pattern tests covered in test_reflect_utils.py
 
     def test_correction_patterns(self):
-        """Test correction patterns are detected by both versions."""
+        """Test that the upstream correction patterns are preserved."""
         test_cases = [
             ("no, use Python", "no,use"),
             ("don't use that library", "don't-use"),

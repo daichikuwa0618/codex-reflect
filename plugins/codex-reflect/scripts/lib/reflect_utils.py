@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Shared utilities for claude-reflect hooks and scripts.
+"""Shared utilities for codex-reflect Hooks and scripts.
 
 Cross-platform compatible (Windows, macOS, Linux).
 """
-import json
 import re
 import os
 from pathlib import Path
@@ -23,449 +22,15 @@ def get_queue_path(project_dir: Optional[str] = None) -> Path:
     return get_project_state_dir(project_dir) / "queue.json"
 
 
-def get_global_queue_path() -> Path:
-    """Get path to the legacy global learnings queue file.
-
-    Used for migration: items from the old global queue are distributed
-    to their per-project queues on first access.
-    """
-    return Path.home() / ".claude" / "learnings-queue.json"
-
-
-def migrate_global_queue() -> None:
-    """Migrate items from the legacy global queue to per-project queues.
-
-    Each queue item has a 'project' field with the original cwd.
-    Items are distributed to their respective project queues, then
-    the global queue is cleared.
-    """
-    global_path = get_global_queue_path()
-    if not global_path.exists():
-        return
-
-    try:
-        items = json.loads(global_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, IOError):
-        return
-
-    if not items:
-        # Empty global queue — remove file so future calls skip immediately
-        global_path.unlink(missing_ok=True)
-        return
-
-    # Group items by project
-    by_project: Dict[str, List[Dict[str, Any]]] = {}
-    for item in items:
-        project = item.get("project", "")
-        if project not in by_project:
-            by_project[project] = []
-        by_project[project].append(item)
-
-    # Write each group to its project queue
-    for project, project_items in by_project.items():
-        if not project:
-            continue
-        try:
-            project_queue_path = (
-                get_claude_dir()
-                / "projects"
-                / get_project_folder_name(project)
-                / "learnings-queue.json"
-            )
-            # Merge with any existing project queue
-            existing = []
-            if project_queue_path.exists():
-                try:
-                    existing = json.loads(
-                        project_queue_path.read_text(encoding="utf-8")
-                    )
-                except (json.JSONDecodeError, IOError):
-                    existing = []
-            existing.extend(project_items)
-            project_queue_path.parent.mkdir(parents=True, exist_ok=True)
-            project_queue_path.write_text(
-                json.dumps(existing, indent=2), encoding="utf-8"
-            )
-        except Exception:
-            continue
-
-    # Remove global queue after successful migration so future calls skip via exists() check
-    global_path.unlink(missing_ok=True)
-
-
 def get_backup_dir(project_dir: Optional[str] = None) -> Path:
     """Get the current project's queue backup directory."""
     return get_project_state_dir(project_dir) / "backups"
 
 
-def get_claude_dir() -> Path:
-    """Get path to .claude directory."""
-    return Path.home() / ".claude"
-
-
-def get_cleanup_period_days() -> Optional[int]:
-    """Get cleanupPeriodDays from ~/.claude/settings.json. Returns None if not set."""
-    settings_path = get_claude_dir() / "settings.json"
-    if not settings_path.exists():
-        return None
-    try:
-        settings = json.loads(settings_path.read_text(encoding="utf-8"))
-        return settings.get("cleanupPeriodDays")
-    except (json.JSONDecodeError, IOError):
-        return None
-
-
-# Directories to exclude when searching for CLAUDE.md files
-EXCLUDED_DIRS = {
-    'node_modules', '.git', '.svn', '.hg', 'venv', '.venv', 'env', '.env',
-    '__pycache__', '.pytest_cache', '.mypy_cache', 'dist', 'build',
-    '.next', '.nuxt', 'coverage', '.coverage', 'htmlcov',
-    'vendor', 'target', 'out', 'bin', 'obj',
-}
-
-
-def _parse_rule_frontmatter(filepath: Path) -> Optional[Dict[str, Any]]:
-    """Parse YAML-like frontmatter from a .claude/rules/*.md file.
-
-    Extracts 'paths:' list without requiring PyYAML. Frontmatter is delimited
-    by '---' lines at the start of the file.
-
-    Returns:
-        Dict with parsed fields (e.g. {"paths": ["src/", "lib/"]}), or None
-        if no frontmatter is found.
-    """
-    try:
-        text = filepath.read_text(encoding="utf-8")
-    except (IOError, OSError):
-        return None
-
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return None
-
-    # Find closing ---
-    end_idx = None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            end_idx = i
-            break
-
-    if end_idx is None:
-        return None
-
-    result: Dict[str, Any] = {}
-    current_key = None
-    current_list: List[str] = []
-
-    for line in lines[1:end_idx]:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-
-        # Check for "key: value" or "key:" (start of list)
-        if ":" in stripped and not stripped.startswith("-"):
-            # Save previous list if any
-            if current_key and current_list:
-                result[current_key] = current_list
-                current_list = []
-
-            key, _, value = stripped.partition(":")
-            current_key = key.strip()
-            value = value.strip()
-            if value:
-                result[current_key] = value
-                current_key = None
-        elif stripped.startswith("- ") and current_key:
-            current_list.append(stripped[2:].strip().strip('"').strip("'"))
-
-    # Save final list
-    if current_key and current_list:
-        result[current_key] = current_list
-
-    return result if result else None
-
-
-def find_claude_files(root_dir: Optional[str] = None) -> List[Dict[str, Any]]:
-    """
-    Find all memory tier files in the project tree.
-
-    Args:
-        root_dir: Root directory to search from (defaults to cwd)
-
-    Returns:
-        List of dicts with {path, relative_path, type, ...} for each file found.
-        Types: 'global', 'root', 'local', 'subdirectory', 'rule', 'user-rule'.
-        Rule files include a 'frontmatter' field with parsed YAML frontmatter.
-    """
-    root = Path(root_dir) if root_dir else Path.cwd()
-    results = []
-
-    # Always include global CLAUDE.md
-    global_claude = get_claude_dir() / "CLAUDE.md"
-    if global_claude.exists():
-        results.append({
-            "path": str(global_claude),
-            "relative_path": "~/.claude/CLAUDE.md",
-            "type": "global",
-        })
-
-    # Check root CLAUDE.md
-    root_claude = root / "CLAUDE.md"
-    if root_claude.exists():
-        results.append({
-            "path": str(root_claude),
-            "relative_path": "./CLAUDE.md",
-            "type": "root",
-        })
-
-    # Check CLAUDE.local.md (personal, gitignored)
-    local_claude = root / "CLAUDE.local.md"
-    if local_claude.exists():
-        results.append({
-            "path": str(local_claude),
-            "relative_path": "./CLAUDE.local.md",
-            "type": "local",
-        })
-
-    # Search for CLAUDE.md in subdirectories
-    for dirpath, dirnames, filenames in os.walk(root):
-        # Skip excluded directories
-        dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIRS]
-
-        # Skip root (already handled)
-        if Path(dirpath) == root:
-            continue
-
-        if "CLAUDE.md" in filenames:
-            full_path = Path(dirpath) / "CLAUDE.md"
-            rel_path = full_path.relative_to(root)
-            # Use as_posix() for consistent forward slashes on all platforms
-            results.append({
-                "path": str(full_path),
-                "relative_path": f"./{rel_path.as_posix()}",
-                "type": "subdirectory",
-            })
-
-    # Discover project rule files: .claude/rules/*.md
-    project_rules_dir = root / ".claude" / "rules"
-    if project_rules_dir.is_dir():
-        for rule_file in sorted(project_rules_dir.glob("*.md")):
-            frontmatter = _parse_rule_frontmatter(rule_file)
-            rel_path = rule_file.relative_to(root)
-            results.append({
-                "path": str(rule_file),
-                "relative_path": f"./{rel_path.as_posix()}",
-                "type": "rule",
-                "frontmatter": frontmatter,
-            })
-
-    # Discover user-level rule files: ~/.claude/rules/*.md
-    user_rules_dir = get_claude_dir() / "rules"
-    if user_rules_dir.is_dir():
-        for rule_file in sorted(user_rules_dir.glob("*.md")):
-            frontmatter = _parse_rule_frontmatter(rule_file)
-            results.append({
-                "path": str(rule_file),
-                "relative_path": f"~/.claude/rules/{rule_file.name}",
-                "type": "user-rule",
-                "frontmatter": frontmatter,
-            })
-
-    return results
-
-
-def suggest_claude_file(
-    learning: str,
-    claude_files: List[Dict[str, Any]],
-    learning_type: Optional[str] = None,
-) -> Optional[str]:
-    """
-    Suggest which memory file a learning should go to.
-
-    This is a hint for Claude to use when reasoning about placement.
-    Returns the relative_path of the suggested file, or None to let Claude decide.
-
-    Args:
-        learning: The learning text.
-        claude_files: List from find_claude_files().
-        learning_type: Optional type hint — 'guardrail', 'auto', 'explicit', etc.
-    """
-    learning_lower = learning.lower()
-
-    # Guardrails → .claude/rules/guardrails.md
-    if learning_type == "guardrail":
-        # Check if a guardrails rule file already exists
-        for cf in claude_files:
-            if cf["type"] == "rule" and "guardrail" in Path(cf["path"]).stem.lower():
-                return cf["relative_path"]
-        # Suggest creating one
-        return "./.claude/rules/guardrails.md"
-
-    # Model indicators → existing model-preferences rule or global CLAUDE.md
-    model_indicators = ['gpt-', 'claude-', 'gemini-', 'o3', 'o4']
-    if any(ind in learning_lower for ind in model_indicators):
-        for cf in claude_files:
-            if cf["type"] in ("rule", "user-rule") and "model" in Path(cf["path"]).stem.lower():
-                return cf["relative_path"]
-        return "~/.claude/CLAUDE.md"
-
-    # Global behavioral (always/never/prefer) → global CLAUDE.md
-    global_behavioral = ['always ', 'never ', 'prefer ']
-    if any(ind in learning_lower for ind in global_behavioral):
-        return "~/.claude/CLAUDE.md"
-
-    # Path-scoped rule match: learning mentions a directory covered by a rule's paths
-    for cf in claude_files:
-        if cf["type"] == "rule" and cf.get("frontmatter"):
-            paths = cf["frontmatter"].get("paths", [])
-            if isinstance(paths, list):
-                for p in paths:
-                    if p.lower().rstrip("/") in learning_lower:
-                        return cf["relative_path"]
-
-    # Check if learning mentions a specific subdirectory
-    for cf in claude_files:
-        if cf["type"] == "subdirectory":
-            # Extract directory name from path
-            dir_name = Path(cf["relative_path"]).parent.name.lower()
-            if dir_name in learning_lower:
-                return cf["relative_path"]
-
-    # Default: let Claude decide (return None)
-    return None
-
-
-# =============================================================================
-# Auto memory utilities
-# =============================================================================
-
-def get_project_folder_name(project_dir: Optional[str] = None) -> str:
-    """Encode a project directory path using Claude Code's folder naming convention.
-
-    /Users/bob/myapp → -Users-bob-myapp
-    """
-    project_path = Path(project_dir).resolve() if project_dir else Path.cwd().resolve()
-    folder_name = str(project_path).replace("/", "-").replace("\\", "-")
-    if folder_name.startswith("-"):
-        folder_name = folder_name[1:]
-    return "-" + folder_name
-
-
-def get_auto_memory_path(project_dir: Optional[str] = None) -> Path:
-    """Get the auto memory directory path for a project.
-
-    Returns ~/.claude/projects/<encoded>/memory/
-    """
-    folder_name = get_project_folder_name(project_dir)
-    return get_claude_dir() / "projects" / folder_name / "memory"
-
-
-def read_auto_memory(project_dir: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Read all .md files from the project's auto memory directory.
-
-    Returns list of {file, name, entries} where entries are non-empty lines.
-    """
-    memory_path = get_auto_memory_path(project_dir)
-    results = []
-
-    if not memory_path.is_dir():
-        return results
-
-    for md_file in sorted(memory_path.glob("*.md")):
-        try:
-            text = md_file.read_text(encoding="utf-8")
-            entries = [line.strip() for line in text.splitlines() if line.strip()]
-            results.append({
-                "file": str(md_file),
-                "name": md_file.stem,
-                "entries": entries,
-            })
-        except (IOError, OSError):
-            continue
-
-    return results
-
-
-# Topic keywords for auto memory file naming
-_AUTO_MEMORY_TOPICS = {
-    "model-preferences": ["gpt-", "claude-", "gemini-", "o3", "o4", "model", "llm"],
-    "tool-usage": ["mcp", "tool", "plugin", "api", "endpoint"],
-    "coding-style": ["indent", "format", "style", "naming", "convention", "lint"],
-    "environment": ["venv", "env", "docker", "port", "database", "redis", "postgres"],
-    "workflow": ["commit", "deploy", "test", "build", "ci", "cd", "pipeline"],
-    "debugging": ["debug", "error", "log", "trace", "breakpoint"],
-}
-
-
-def suggest_auto_memory_topic(learning: str) -> str:
-    """Suggest a topic filename for an auto memory entry based on keywords.
-
-    Returns a filename stem like 'model-preferences' or 'general'.
-    """
-    learning_lower = learning.lower()
-    best_topic = "general"
-    best_score = 0
-
-    for topic, keywords in _AUTO_MEMORY_TOPICS.items():
-        score = sum(1 for kw in keywords if kw in learning_lower)
-        if score > best_score:
-            best_score = score
-            best_topic = topic
-
-    return best_topic
-
-
-def read_all_memory_entries(
-    root_dir: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    """Read bullet-point entries from ALL memory tiers for cross-tier deduplication.
-
-    Scans: CLAUDE.md files, rule files, CLAUDE.local.md, and auto memory.
-
-    Returns list of {text, source_file, source_type, line_number}.
-    """
-    claude_files = find_claude_files(root_dir)
-    entries: List[Dict[str, Any]] = []
-
-    # Read entries from each CLAUDE.md / rule / local file
-    for cf in claude_files:
-        filepath = Path(cf["path"])
-        if cf["type"] == "global":
-            filepath = Path(cf["path"])
-        try:
-            text = filepath.read_text(encoding="utf-8")
-        except (IOError, OSError):
-            continue
-
-        for line_num, line in enumerate(text.splitlines(), start=1):
-            stripped = line.strip()
-            if stripped.startswith("- "):
-                entries.append({
-                    "text": stripped[2:].strip(),
-                    "source_file": cf["relative_path"],
-                    "source_type": cf["type"],
-                    "line_number": line_num,
-                })
-
-    # Read auto memory entries
-    auto_memory = read_auto_memory(root_dir)
-    for mem in auto_memory:
-        for idx, entry_text in enumerate(mem["entries"]):
-            clean = entry_text.lstrip("- ").strip()
-            if clean and not clean.startswith("#"):
-                entries.append({
-                    "text": clean,
-                    "source_file": f"~/.claude/projects/.../memory/{mem['name']}.md",
-                    "source_type": "auto-memory",
-                    "line_number": idx + 1,
-                })
-
-    return entries
-
-
 # =============================================================================
 # Queue operations
 # =============================================================================
+
 
 def load_queue(project_dir: Optional[str] = None) -> List[Dict[str, Any]]:
     """Load the current project's queue from shared Codex state."""
@@ -497,7 +62,7 @@ def backup_timestamp() -> str:
 
 
 # =============================================================================
-# Pattern definitions (from capture-learning.sh)
+# Pattern definitions retained from the upstream capture behavior
 # =============================================================================
 
 # Explicit marker patterns (highest confidence)
@@ -517,7 +82,7 @@ POSITIVE_PATTERNS = [
 #
 # DESIGN NOTES:
 # - These patterns are English-centric as a FAST first-pass filter
-# - Non-English corrections are caught by semantic filtering during /reflect
+# - Non-English corrections are caught by semantic filtering during reflect
 # - We use STRUCTURAL signals (length, questions, task requests) for language-agnostic filtering
 # - Users can use explicit markers like "remember:" in any language
 #
@@ -533,7 +98,7 @@ CORRECTION_PATTERNS = [
 ]
 
 # Guardrail patterns - "don't do X unless" constraints (highest confidence for corrections)
-# These detect user frustrations about Claude making unwanted changes
+# These detect user frustrations about the agent making unwanted changes
 # Format: (regex_pattern, pattern_name, confidence, decay_days)
 GUARDRAIL_PATTERNS = [
     (r"don't (?:add|include|create) .{1,40} unless", "dont-unless-asked", 0.90, 120),
@@ -970,7 +535,7 @@ def aggregate_tool_errors(
     """
     Group errors by type and return those with multiple occurrences.
 
-    Only repeated errors are valuable for CLAUDE.md - one-off errors are noise.
+    Only repeated errors are valuable for AGENTS.md guidance; one-offs are noise.
 
     Args:
         errors: List of error dicts from extract_tool_errors()

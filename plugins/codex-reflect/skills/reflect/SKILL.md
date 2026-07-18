@@ -9,7 +9,7 @@ Resolve `../../scripts/commands/reflect.py` relative to this SKILL.md and keep t
 2. Run the preparation command and present the candidate summary.
 3. Ask the user to choose `apply all`, `select`, `details`, or `skip`.
 4. Confirm target routing for every selected candidate. A read-only Plugin or system Skill receives an improvement proposal only.
-5. Re-read each target and create an exact file diff for `AGENTS.md` or a writable Skill.
+5. Re-read each target and create an exact file diff for `AGENTS.md` or a writable Skill. With `--dedupe`, compare candidates with existing target guidance and propose merges. With `--organize`, inspect the applicable `AGENTS.md` hierarchy, authoring Skills, and queue, then propose moves or consolidations only among those locations.
 6. Show the exact target paths and diff, then obtain `final confirmation`.
 7. Only after final confirmation, use edit tools to apply the approved diff.
 8. If a target changed during review, stop, re-read it, and regenerate the diff before asking again.

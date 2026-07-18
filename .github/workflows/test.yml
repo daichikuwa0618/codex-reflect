@@ -31,10 +31,16 @@ jobs:
       - name: Run tests
         run: python -m pytest tests/ -v
 
-      - name: Test hook scripts are executable
+      - name: Validate JSON files
         shell: bash
         run: |
-          # Test that Python scripts can be invoked
-          echo '{}' | python scripts/check_learnings.py
-          echo '{}' | python scripts/post_commit_reminder.py
-          echo '{"prompt":"test"}' | python scripts/capture_learning.py
+          python -m json.tool .agents/plugins/marketplace.json
+          python -m json.tool plugins/codex-reflect/.codex-plugin/plugin.json
+          python -m json.tool plugins/codex-reflect/hooks/hooks.json
+
+      - name: Test hook scripts are invokable
+        shell: bash
+        run: |
+          echo '{"hook_event_name":"SessionStart","cwd":"."}' | python plugins/codex-reflect/scripts/session_start_reminder.py
+          echo '{"hook_event_name":"PostToolUse","cwd":".","tool_input":{"command":"true"}}' | python plugins/codex-reflect/scripts/post_commit_reminder.py
+          echo '{"hook_event_name":"UserPromptSubmit","cwd":".","prompt":"test"}' | python plugins/codex-reflect/scripts/capture_learning.py
