@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for semantic_detector module.
 
-These tests mock subprocess.run to avoid actual Claude CLI calls.
+These tests mock subprocess.run to avoid actual Codex CLI calls.
 Run with: python -m pytest tests/test_semantic_detector.py -v
 """
 import json
@@ -19,6 +19,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from lib.semantic_detector import (
     semantic_analyze,
+    validate_tool_error,
     validate_queue_items,
     detect_contradictions,
     _extract_json_from_text,
@@ -28,21 +29,99 @@ from lib.semantic_detector import (
 )
 
 
+def _codex_run_with_response(response_dict):
+    """Return a subprocess side effect that writes Codex structured output."""
+    def fake_run(command, **kwargs):
+        output_index = command.index("--output-last-message") + 1
+        Path(command[output_index]).write_text(
+            json.dumps(response_dict), encoding="utf-8"
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    return fake_run
+
+
+def _codex_run_with_raw_output(value):
+    def fake_run(command, **kwargs):
+        output_index = command.index("--output-last-message") + 1
+        Path(command[output_index]).write_text(value, encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    return fake_run
+
+
 class TestSemanticAnalyze(unittest.TestCase):
     """Tests for semantic_analyze function."""
 
-    def _mock_claude_response(self, response_dict):
-        """Create a mock subprocess result with Claude-like JSON output."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = json.dumps(response_dict)
-        mock_result.stderr = ""
-        return mock_result
+    def _mock_codex_response(self, response_dict):
+        return _codex_run_with_response(response_dict)
+
+    @patch("lib.semantic_detector.subprocess.run")
+    def test_codex_exec_contract_is_ephemeral_read_only_and_hook_free(
+        self, mock_run
+    ):
+        mock_run.side_effect = _codex_run_with_response({
+            "is_learning": True,
+            "type": "correction",
+            "confidence": 0.9,
+            "reasoning": "Reusable correction",
+            "extracted_learning": "Use rg instead of grep",
+        })
+
+        semantic_analyze("no, use rg", model="gpt-test")
+
+        command = mock_run.call_args.args[0]
+        self.assertEqual(command[:2], ["codex", "exec"])
+        self.assertIn("--ephemeral", command)
+        self.assertEqual(command[command.index("--disable") + 1], "hooks")
+        self.assertEqual(
+            command[command.index("--sandbox") + 1], "read-only"
+        )
+        self.assertEqual(command[command.index("--model") + 1], "gpt-test")
+        self.assertEqual(command[-1], "-")
+
+    @patch("lib.semantic_detector.subprocess.run")
+    def test_codex_exec_uses_current_default_model_when_unspecified(
+        self, mock_run
+    ):
+        mock_run.side_effect = _codex_run_with_response({
+            "is_learning": False,
+            "type": None,
+            "confidence": 0,
+            "reasoning": "Not reusable",
+            "extracted_learning": None,
+        })
+
+        semantic_analyze("hello")
+
+        self.assertNotIn("--model", mock_run.call_args.args[0])
+
+    @patch("lib.semantic_detector.subprocess.run")
+    def test_codex_exec_redacts_prompt_before_subprocess(self, mock_run):
+        prompts = []
+
+        def fake_run(command, **kwargs):
+            prompts.append(kwargs["input"])
+            return _codex_run_with_response({
+                "is_learning": False,
+                "type": None,
+                "confidence": 0,
+                "reasoning": "Not reusable",
+                "extracted_learning": None,
+            })(command, **kwargs)
+
+        mock_run.side_effect = fake_run
+
+        semantic_analyze("API_KEY=secret-value")
+
+        self.assertEqual(len(prompts), 1)
+        self.assertNotIn("secret-value", prompts[0])
+        self.assertIn("[REDACTED]", prompts[0])
 
     @patch("lib.semantic_detector.subprocess.run")
     def test_successful_correction_detection(self, mock_run):
         """Test successful detection of a correction."""
-        mock_run.return_value = self._mock_claude_response({
+        mock_run.side_effect = self._mock_codex_response({
             "is_learning": True,
             "type": "correction",
             "confidence": 0.85,
@@ -61,7 +140,7 @@ class TestSemanticAnalyze(unittest.TestCase):
     @patch("lib.semantic_detector.subprocess.run")
     def test_successful_positive_detection(self, mock_run):
         """Test successful detection of positive feedback."""
-        mock_run.return_value = self._mock_claude_response({
+        mock_run.side_effect = self._mock_codex_response({
             "is_learning": True,
             "type": "positive",
             "confidence": 0.75,
@@ -78,7 +157,7 @@ class TestSemanticAnalyze(unittest.TestCase):
     @patch("lib.semantic_detector.subprocess.run")
     def test_successful_explicit_detection(self, mock_run):
         """Test successful detection of explicit remember marker."""
-        mock_run.return_value = self._mock_claude_response({
+        mock_run.side_effect = self._mock_codex_response({
             "is_learning": True,
             "type": "explicit",
             "confidence": 0.95,
@@ -96,7 +175,7 @@ class TestSemanticAnalyze(unittest.TestCase):
     @patch("lib.semantic_detector.subprocess.run")
     def test_not_a_learning(self, mock_run):
         """Test detection of non-learning message."""
-        mock_run.return_value = self._mock_claude_response({
+        mock_run.side_effect = self._mock_codex_response({
             "is_learning": False,
             "type": None,
             "confidence": 0.1,
@@ -113,7 +192,7 @@ class TestSemanticAnalyze(unittest.TestCase):
     @patch("lib.semantic_detector.subprocess.run")
     def test_multi_language_spanish(self, mock_run):
         """Test detection works for Spanish messages."""
-        mock_run.return_value = self._mock_claude_response({
+        mock_run.side_effect = self._mock_codex_response({
             "is_learning": True,
             "type": "correction",
             "confidence": 0.80,
@@ -130,7 +209,7 @@ class TestSemanticAnalyze(unittest.TestCase):
     @patch("lib.semantic_detector.subprocess.run")
     def test_multi_language_french(self, mock_run):
         """Test detection works for French messages."""
-        mock_run.return_value = self._mock_claude_response({
+        mock_run.side_effect = self._mock_codex_response({
             "is_learning": True,
             "type": "correction",
             "confidence": 0.78,
@@ -146,7 +225,7 @@ class TestSemanticAnalyze(unittest.TestCase):
     @patch("lib.semantic_detector.subprocess.run")
     def test_multi_language_russian(self, mock_run):
         """Test detection works for Russian messages."""
-        mock_run.return_value = self._mock_claude_response({
+        mock_run.side_effect = self._mock_codex_response({
             "is_learning": True,
             "type": "correction",
             "confidence": 0.82,
@@ -162,24 +241,24 @@ class TestSemanticAnalyze(unittest.TestCase):
     @patch("lib.semantic_detector.subprocess.run")
     def test_timeout_returns_none(self, mock_run):
         """Test that timeout returns None for graceful fallback."""
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=30)
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="codex", timeout=30)
 
         result = semantic_analyze("some text")
 
         self.assertIsNone(result)
 
     @patch("lib.semantic_detector.subprocess.run")
-    def test_claude_not_installed(self, mock_run):
-        """Test graceful handling when Claude CLI is not installed."""
-        mock_run.side_effect = FileNotFoundError("claude not found")
+    def test_codex_not_installed(self, mock_run):
+        """Test graceful handling when Codex CLI is not installed."""
+        mock_run.side_effect = FileNotFoundError("codex not found")
 
         result = semantic_analyze("some text")
 
         self.assertIsNone(result)
 
     @patch("lib.semantic_detector.subprocess.run")
-    def test_claude_cli_error(self, mock_run):
-        """Test handling of Claude CLI returning non-zero exit code."""
+    def test_codex_cli_error(self, mock_run):
+        """Test handling of Codex CLI returning non-zero exit code."""
         mock_result = MagicMock()
         mock_result.returncode = 1
         mock_result.stdout = ""
@@ -192,7 +271,7 @@ class TestSemanticAnalyze(unittest.TestCase):
 
     @patch("lib.semantic_detector.subprocess.run")
     def test_empty_output(self, mock_run):
-        """Test handling of empty output from Claude."""
+        """Test handling of a missing Codex structured output file."""
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = ""
@@ -217,11 +296,9 @@ class TestSemanticAnalyze(unittest.TestCase):
         self.assertIsNone(result)
 
     @patch("lib.semantic_detector.subprocess.run")
-    def test_wrapped_json_response(self, mock_run):
-        """Test handling of JSON wrapped in 'result' field."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = json.dumps({
+    def test_wrapped_json_response_is_rejected(self, mock_run):
+        """Structured output must match the requested schema directly."""
+        mock_run.side_effect = _codex_run_with_response({
             "result": {
                 "is_learning": True,
                 "type": "correction",
@@ -230,20 +307,15 @@ class TestSemanticAnalyze(unittest.TestCase):
                 "extracted_learning": "Use pytest",
             }
         })
-        mock_result.stderr = ""
-        mock_run.return_value = mock_result
 
         result = semantic_analyze("no, use pytest not unittest")
 
-        self.assertIsNotNone(result)
-        self.assertTrue(result["is_learning"])
+        self.assertIsNone(result)
 
     @patch("lib.semantic_detector.subprocess.run")
-    def test_json_with_markdown_wrapper(self, mock_run):
-        """Test extraction of JSON from markdown code block."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = '''Here is the analysis:
+    def test_json_with_markdown_wrapper_is_rejected(self, mock_run):
+        """Schema-constrained output must not accept markdown wrappers."""
+        mock_run.side_effect = _codex_run_with_raw_output('''Here is the analysis:
 ```json
 {
   "is_learning": true,
@@ -253,17 +325,14 @@ class TestSemanticAnalyze(unittest.TestCase):
   "extracted_learning": "Use type hints"
 }
 ```
-'''
-        mock_result.stderr = ""
-        mock_run.return_value = mock_result
+''')
 
         result = semantic_analyze("you should use type hints")
 
-        self.assertIsNotNone(result)
-        self.assertTrue(result["is_learning"])
+        self.assertIsNone(result)
 
     def test_empty_text_input(self):
-        """Test that empty text returns None without calling Claude."""
+        """Test that empty text returns None without calling Codex."""
         result = semantic_analyze("")
         self.assertIsNone(result)
 
@@ -273,7 +342,7 @@ class TestSemanticAnalyze(unittest.TestCase):
     @patch("lib.semantic_detector.subprocess.run")
     def test_custom_timeout(self, mock_run):
         """Test that custom timeout is passed to subprocess."""
-        mock_run.return_value = self._mock_claude_response({
+        mock_run.side_effect = self._mock_codex_response({
             "is_learning": False,
             "type": None,
             "confidence": 0.1,
@@ -289,8 +358,8 @@ class TestSemanticAnalyze(unittest.TestCase):
 
     @patch("lib.semantic_detector.subprocess.run")
     def test_custom_model(self, mock_run):
-        """Test that custom model is passed to Claude CLI."""
-        mock_run.return_value = self._mock_claude_response({
+        """Test that a custom model is passed to Codex CLI."""
+        mock_run.side_effect = self._mock_codex_response({
             "is_learning": False,
             "type": None,
             "confidence": 0.1,
@@ -298,12 +367,26 @@ class TestSemanticAnalyze(unittest.TestCase):
             "extracted_learning": None,
         })
 
-        semantic_analyze("test", model="haiku")
+        semantic_analyze("test", model="gpt-test")
 
         mock_run.assert_called_once()
         call_args = mock_run.call_args[0][0]
         self.assertIn("--model", call_args)
-        self.assertIn("haiku", call_args)
+        self.assertIn("gpt-test", call_args)
+
+
+class TestCodexSchemas(unittest.TestCase):
+    def test_required_schema_files_are_valid_objects(self):
+        schemas = PLUGIN_ROOT / "schemas"
+        for name in (
+            "learning-analysis.schema.json",
+            "tool-error-analysis.schema.json",
+            "contradictions.schema.json",
+        ):
+            with self.subTest(name=name):
+                value = json.loads((schemas / name).read_text(encoding="utf-8"))
+                self.assertEqual(value["type"], "object")
+                self.assertFalse(value["additionalProperties"])
 
 
 class TestExtractJsonFromText(unittest.TestCase):
@@ -565,6 +648,36 @@ class TestValidateQueueItems(unittest.TestCase):
         self.assertEqual(result, [])
 
 
+class TestValidateToolError(unittest.TestCase):
+    @patch("lib.semantic_detector.subprocess.run")
+    def test_uses_tool_error_schema_and_redacts_prompt(self, mock_run):
+        prompts = []
+
+        def fake_run(command, **kwargs):
+            prompts.append(kwargs["input"])
+            return _codex_run_with_response({
+                "is_learnable": True,
+                "refined_guideline": "Load the project environment first",
+                "confidence": 0.8,
+                "reasoning": "Project-specific environment failure",
+            })(command, **kwargs)
+
+        mock_run.side_effect = fake_run
+
+        result = validate_tool_error(
+            "env_undefined",
+            "API_KEY=secret-value is not set",
+            2,
+            "Load the environment",
+        )
+
+        command = mock_run.call_args.args[0]
+        schema = command[command.index("--output-schema") + 1]
+        self.assertTrue(schema.endswith("tool-error-analysis.schema.json"))
+        self.assertNotIn("secret-value", prompts[0])
+        self.assertEqual(result["confidence"], 0.8)
+
+
 class TestAnalysisPrompt(unittest.TestCase):
     """Tests for the analysis prompt template."""
 
@@ -586,13 +699,8 @@ class TestAnalysisPrompt(unittest.TestCase):
 class TestDetectContradictions(unittest.TestCase):
     """Tests for detect_contradictions function."""
 
-    def _mock_claude_response(self, response_dict):
-        """Create a mock subprocess result with Claude-like JSON output."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = json.dumps(response_dict)
-        mock_result.stderr = ""
-        return mock_result
+    def _mock_codex_response(self, response_dict):
+        return _codex_run_with_response(response_dict)
 
     def test_empty_entries_list(self):
         """Test that empty entries return empty list."""
@@ -605,9 +713,21 @@ class TestDetectContradictions(unittest.TestCase):
         self.assertEqual(result, [])
 
     @patch("lib.semantic_detector.subprocess.run")
+    def test_uses_contradiction_schema(self, mock_run):
+        mock_run.side_effect = self._mock_codex_response({
+            "contradictions": []
+        })
+
+        detect_contradictions(["Use tabs", "Use spaces"])
+
+        command = mock_run.call_args.args[0]
+        schema = command[command.index("--output-schema") + 1]
+        self.assertTrue(schema.endswith("contradictions.schema.json"))
+
+    @patch("lib.semantic_detector.subprocess.run")
     def test_detects_contradiction(self, mock_run):
         """Test successful detection of contradicting entries."""
-        mock_run.return_value = self._mock_claude_response({
+        mock_run.side_effect = self._mock_codex_response({
             "contradictions": [
                 {
                     "entry1": "Use tabs for indentation",
@@ -633,7 +753,7 @@ class TestDetectContradictions(unittest.TestCase):
     @patch("lib.semantic_detector.subprocess.run")
     def test_no_contradictions_found(self, mock_run):
         """Test when no contradictions are found."""
-        mock_run.return_value = self._mock_claude_response({
+        mock_run.side_effect = self._mock_codex_response({
             "contradictions": []
         })
 
@@ -647,11 +767,9 @@ class TestDetectContradictions(unittest.TestCase):
         self.assertEqual(result, [])
 
     @patch("lib.semantic_detector.subprocess.run")
-    def test_handles_wrapped_response(self, mock_run):
-        """Test handling of JSON wrapped in 'result' field."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = json.dumps({
+    def test_rejects_wrapped_response(self, mock_run):
+        """Contradiction output must match its schema directly."""
+        mock_run.side_effect = _codex_run_with_response({
             "result": {
                 "contradictions": [
                     {
@@ -662,13 +780,11 @@ class TestDetectContradictions(unittest.TestCase):
                 ]
             }
         })
-        mock_result.stderr = ""
-        mock_run.return_value = mock_result
 
         entries = ["Always use TypeScript", "Prefer JavaScript over TypeScript"]
         result = detect_contradictions(entries)
 
-        self.assertEqual(len(result), 1)
+        self.assertEqual(result, [])
 
     @patch("lib.semantic_detector.subprocess.run")
     def test_cli_error_returns_empty(self, mock_run):
@@ -687,7 +803,7 @@ class TestDetectContradictions(unittest.TestCase):
     @patch("lib.semantic_detector.subprocess.run")
     def test_timeout_returns_empty(self, mock_run):
         """Test that timeout returns empty list."""
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=30)
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="codex", timeout=30)
 
         entries = ["Use tabs", "Use spaces"]
         result = detect_contradictions(entries)
@@ -711,7 +827,7 @@ class TestDetectContradictions(unittest.TestCase):
     @patch("lib.semantic_detector.subprocess.run")
     def test_validates_contradiction_structure(self, mock_run):
         """Test that invalid contradiction structures are filtered out."""
-        mock_run.return_value = self._mock_claude_response({
+        mock_run.side_effect = self._mock_codex_response({
             "contradictions": [
                 {"entry1": "Valid", "entry2": "Also valid", "conflict": "reason"},
                 {"entry1": "Missing entry2"},  # Invalid - missing entry2

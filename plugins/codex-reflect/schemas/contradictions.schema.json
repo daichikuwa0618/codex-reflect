@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contradictions"],
+  "properties": {
+    "contradictions": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entry1", "entry2", "conflict"],
+        "properties": {
+          "entry1": {"type": "string"},
+          "entry2": {"type": "string"},
+          "conflict": {"type": "string"}
+        }
+      }
+    }
+  }
+}

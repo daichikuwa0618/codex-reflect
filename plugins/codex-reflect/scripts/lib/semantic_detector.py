@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
-"""Semantic learning detection using Claude Code CLI.
-
-Uses `claude -p` (print mode) to semantically analyze user messages
-and determine if they contain reusable learnings.
-"""
+"""Semantic learning detection through isolated ``codex exec`` calls."""
 import json
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 from typing import Optional, Dict, Any
 
-# Default timeout for Claude CLI calls (seconds)
+from .redaction import redact_secrets
+
+
+# Default timeout for Codex CLI calls (seconds)
 DEFAULT_TIMEOUT = 30
 
-# Default model for semantic analysis — uses a cost-effective model
-# to avoid burning expensive Opus tokens on classification tasks.
-# Override via --model flag in /reflect or model parameter in API calls.
-DEFAULT_MODEL = "sonnet"
+# Retained as a public compatibility constant. None delegates to Codex's
+# configured current default instead of pinning a model slug.
+DEFAULT_MODEL = None
+
+SCHEMAS_DIR = Path(__file__).resolve().parents[2] / "schemas"
+LEARNING_SCHEMA = SCHEMAS_DIR / "learning-analysis.schema.json"
+TOOL_ERROR_SCHEMA = SCHEMAS_DIR / "tool-error-analysis.schema.json"
+CONTRADICTIONS_SCHEMA = SCHEMAS_DIR / "contradictions.schema.json"
 
 # Semantic analysis prompt template
 ANALYSIS_PROMPT = """Analyze this user message from a coding session. Determine if it contains
@@ -29,7 +34,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
   "type": "correction" or "positive" or "explicit" or null,
   "confidence": 0.0 to 1.0,
   "reasoning": "brief 1-sentence explanation",
-  "extracted_learning": "concise actionable statement to add to CLAUDE.md, or null if not a learning"
+  "extracted_learning": "concise actionable statement for AGENTS.md or Skill guidance, or null if not a learning"
 }}
 
 Guidelines:
@@ -43,18 +48,70 @@ Guidelines:
 - Filter out: questions, greetings, one-time commands, context-specific requests"""
 
 
+def _run_codex(
+    prompt: str,
+    schema_path: Path,
+    timeout: int,
+    model: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Run one hook-free, ephemeral, read-only structured Codex request."""
+    sanitized_prompt = redact_secrets(prompt)
+    try:
+        with tempfile.TemporaryDirectory(prefix="codex-reflect-") as temp_dir:
+            output_path = Path(temp_dir) / "result.json"
+            command = [
+                "codex",
+                "exec",
+                "--ephemeral",
+                "--disable",
+                "hooks",
+                "--sandbox",
+                "read-only",
+                "--skip-git-repo-check",
+                "--cd",
+                temp_dir,
+                "--output-schema",
+                str(schema_path),
+                "--output-last-message",
+                str(output_path),
+                "-",
+            ]
+            if model:
+                command[2:2] = ["--model", model]
+            result = subprocess.run(
+                command,
+                input=sanitized_prompt,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+            if result.returncode != 0 or not output_path.is_file():
+                return None
+            value = json.loads(output_path.read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else None
+    except (
+        FileNotFoundError,
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+        subprocess.TimeoutExpired,
+    ):
+        return None
+
+
 def semantic_analyze(
     text: str,
     timeout: int = DEFAULT_TIMEOUT,
     model: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """
-    Analyze text using Claude to determine if it's a learning.
+    Analyze text using Codex to determine if it's a learning.
 
     Args:
         text: The user message to analyze
-        timeout: Timeout in seconds for the Claude CLI call
-        model: Optional model override (e.g., "sonnet", "haiku")
+        timeout: Timeout in seconds for the Codex CLI call
+        model: Optional Codex model override
 
     Returns:
         Dictionary with analysis results, or None on failure:
@@ -72,56 +129,9 @@ def semantic_analyze(
     # Build the prompt
     prompt = ANALYSIS_PROMPT.format(text=text.replace('"', '\\"'))
 
-    # Build command — use DEFAULT_MODEL if no explicit model specified
-    effective_model = model or DEFAULT_MODEL
-    cmd = ["claude", "-p", "--output-format", "json"]
-    if effective_model:
-        cmd.extend(["--model", effective_model])
-
-    try:
-        result = subprocess.run(
-            cmd,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-
-        if result.returncode != 0:
-            # Claude CLI failed
-            return None
-
-        # Parse the JSON output
-        output = result.stdout.strip()
-        if not output:
-            return None
-
-        # Claude -p --output-format json wraps the response
-        # Try to extract the actual JSON from the response
-        try:
-            response = json.loads(output)
-            # If it's wrapped in a "result" field, extract it
-            if isinstance(response, dict) and "result" in response:
-                content = response["result"]
-            else:
-                content = response
-        except json.JSONDecodeError:
-            # Try to find JSON in the output
-            content = _extract_json_from_text(output)
-            if content is None:
-                return None
-
-        # Validate and normalize the response
-        return _validate_response(content)
-
-    except subprocess.TimeoutExpired:
-        return None
-    except FileNotFoundError:
-        # Claude CLI not installed
-        return None
-    except Exception:
-        return None
+    return _validate_response(
+        _run_codex(prompt, LEARNING_SCHEMA, timeout, model=model)
+    )
 
 
 def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
@@ -147,7 +157,7 @@ def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
 
 
 def _validate_response(content: Any) -> Optional[Dict[str, Any]]:
-    """Validate and normalize the response from Claude."""
+    """Validate and normalize the response from Codex."""
     if not isinstance(content, dict):
         return None
 
@@ -243,8 +253,8 @@ def validate_queue_items(
 # Tool error validation
 # =============================================================================
 
-# Prompt for converting tool errors into CLAUDE.md guidelines
-ERROR_TO_GUIDELINE_PROMPT = """You are analyzing repeated tool execution errors to extract CLAUDE.md guidelines.
+# Prompt for converting tool errors into Codex guidance
+ERROR_TO_GUIDELINE_PROMPT = """You are analyzing repeated tool execution errors to extract AGENTS.md or Skill guidance.
 
 Error type: {error_type}
 Sample error message: "{sample_error}"
@@ -252,7 +262,7 @@ Occurrences: {count}
 Suggested guideline: "{suggested_guideline}"
 
 Analyze this error pattern and determine:
-1. Is this a project-specific issue that should go in CLAUDE.md?
+1. Is this a project-specific issue that should become Codex guidance?
 2. Should the guideline be refined or improved?
 
 Respond ONLY with valid JSON (no markdown, no explanation):
@@ -265,7 +275,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
 
 Guidelines for classification:
 - is_learnable=true: Error reveals project-specific context (env vars, paths, services)
-- is_learnable=false: Error is generic Claude behavior (bash syntax, file handling)
+- is_learnable=false: Error is generic agent behavior (bash syntax, file handling)
 - refined_guideline: Should mention specific services/paths if detected in error
 - confidence: Higher if clearly project-specific (0.7+)"""
 
@@ -279,7 +289,7 @@ def validate_tool_error(
     model: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """
-    Validate a tool error pattern and refine its guideline using Claude.
+    Validate a tool error pattern and refine its guideline using Codex.
 
     Args:
         error_type: The categorized error type
@@ -305,68 +315,33 @@ def validate_tool_error(
         suggested_guideline=suggested_guideline or "No suggestion"
     )
 
-    # Build command — use DEFAULT_MODEL if no explicit model specified
-    effective_model = model or DEFAULT_MODEL
-    cmd = ["claude", "-p", "--output-format", "json"]
-    if effective_model:
-        cmd.extend(["--model", effective_model])
+    content = _run_codex(
+        prompt,
+        TOOL_ERROR_SCHEMA,
+        timeout,
+        model=model,
+    )
+    if not isinstance(content, dict):
+        return None
+
+    is_learnable = content.get("is_learnable", False)
+    if isinstance(is_learnable, str):
+        is_learnable = is_learnable.lower() in ("true", "yes", "1")
 
     try:
-        result = subprocess.run(
-            cmd,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        confidence = float(content.get("confidence", 0.7))
+        confidence = max(0.0, min(1.0, confidence))
+    except (TypeError, ValueError):
+        confidence = 0.7 if is_learnable else 0.3
 
-        if result.returncode != 0:
-            return None
-
-        output = result.stdout.strip()
-        if not output:
-            return None
-
-        # Parse JSON response
-        try:
-            response = json.loads(output)
-            if isinstance(response, dict) and "result" in response:
-                content = response["result"]
-            else:
-                content = response
-        except json.JSONDecodeError:
-            content = _extract_json_from_text(output)
-            if content is None:
-                return None
-
-        # Validate response
-        if not isinstance(content, dict):
-            return None
-
-        is_learnable = content.get("is_learnable", False)
-        if isinstance(is_learnable, str):
-            is_learnable = is_learnable.lower() in ("true", "yes", "1")
-
-        try:
-            confidence = float(content.get("confidence", 0.7))
-            confidence = max(0.0, min(1.0, confidence))
-        except (TypeError, ValueError):
-            confidence = 0.7 if is_learnable else 0.3
-
-        return {
-            "is_learnable": is_learnable,
-            "refined_guideline": content.get("refined_guideline", suggested_guideline),
-            "confidence": confidence,
-            "reasoning": str(content.get("reasoning", "")),
-        }
-
-    except subprocess.TimeoutExpired:
-        return None
-    except FileNotFoundError:
-        return None
-    except Exception:
-        return None
+    return {
+        "is_learnable": is_learnable,
+        "refined_guideline": content.get(
+            "refined_guideline", suggested_guideline
+        ),
+        "confidence": confidence,
+        "reasoning": str(content.get("reasoning", "")),
+    }
 
 
 def validate_tool_errors(
@@ -429,8 +404,8 @@ def validate_tool_errors(
 # Contradiction detection
 # =============================================================================
 
-# Prompt for detecting contradictions in CLAUDE.md entries
-CONTRADICTION_PROMPT = """Analyze these CLAUDE.md entries for contradictions.
+# Prompt for detecting contradictions in Codex guidance
+CONTRADICTION_PROMPT = """Analyze these AGENTS.md or Skill guidance entries for contradictions.
 
 Entries:
 {entries}
@@ -464,12 +439,12 @@ def detect_contradictions(
     model: Optional[str] = None
 ) -> list:
     """
-    Find semantically contradicting entries in a list of CLAUDE.md entries.
+    Find semantically contradicting entries in a list of Codex guidance entries.
 
     Args:
-        entries: List of entry strings (bullet points from CLAUDE.md)
-        timeout: Timeout in seconds for the Claude CLI call
-        model: Optional model override (e.g., "sonnet", "haiku")
+        entries: List of entry strings from AGENTS.md or Skills
+        timeout: Timeout in seconds for the Codex CLI call
+        model: Optional Codex model override
 
     Returns:
         List of contradiction dicts:
@@ -483,67 +458,35 @@ def detect_contradictions(
     entries_text = "\n".join(f"- {e}" for e in entries)
     prompt = CONTRADICTION_PROMPT.format(entries=entries_text)
 
-    # Build command — use DEFAULT_MODEL if no explicit model specified
-    effective_model = model or DEFAULT_MODEL
-    cmd = ["claude", "-p", "--output-format", "json"]
-    if effective_model:
-        cmd.extend(["--model", effective_model])
-
-    try:
-        result = subprocess.run(
-            cmd,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-
-        if result.returncode != 0:
-            return []
-
-        output = result.stdout.strip()
-        if not output:
-            return []
-
-        # Parse JSON response
-        try:
-            response = json.loads(output)
-            if isinstance(response, dict) and "result" in response:
-                content = response["result"]
-            else:
-                content = response
-        except json.JSONDecodeError:
-            content = _extract_json_from_text(output)
-            if content is None:
-                return []
-
-        # Extract contradictions
-        if not isinstance(content, dict):
-            return []
-
-        contradictions = content.get("contradictions", [])
-        if not isinstance(contradictions, list):
-            return []
-
-        # Validate each contradiction
-        valid = []
-        for c in contradictions:
-            if isinstance(c, dict) and "entry1" in c and "entry2" in c:
-                valid.append({
-                    "entry1": str(c.get("entry1", "")),
-                    "entry2": str(c.get("entry2", "")),
-                    "conflict": str(c.get("conflict", "Conflicting instructions")),
-                })
-
-        return valid
-
-    except subprocess.TimeoutExpired:
+    content = _run_codex(
+        prompt,
+        CONTRADICTIONS_SCHEMA,
+        timeout,
+        model=model,
+    )
+    if not isinstance(content, dict):
         return []
-    except FileNotFoundError:
+
+    contradictions = content.get("contradictions", [])
+    if not isinstance(contradictions, list):
         return []
-    except Exception:
-        return []
+
+    valid = []
+    for contradiction in contradictions:
+        if (
+            isinstance(contradiction, dict)
+            and "entry1" in contradiction
+            and "entry2" in contradiction
+        ):
+            valid.append({
+                "entry1": str(contradiction.get("entry1", "")),
+                "entry2": str(contradiction.get("entry2", "")),
+                "conflict": str(
+                    contradiction.get("conflict", "Conflicting instructions")
+                ),
+            })
+
+    return valid
 
 
 if __name__ == "__main__":

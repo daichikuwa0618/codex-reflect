@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "is_learnable",
+    "refined_guideline",
+    "confidence",
+    "reasoning"
+  ],
+  "properties": {
+    "is_learnable": {"type": "boolean"},
+    "refined_guideline": {"type": "string"},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "reasoning": {"type": "string"}
+  }
+}

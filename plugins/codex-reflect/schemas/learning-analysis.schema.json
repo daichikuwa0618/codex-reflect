@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "is_learning",
+    "type",
+    "confidence",
+    "reasoning",
+    "extracted_learning"
+  ],
+  "properties": {
+    "is_learning": {"type": "boolean"},
+    "type": {
+      "type": ["string", "null"],
+      "enum": ["correction", "positive", "explicit", null]
+    },
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "reasoning": {"type": "string"},
+    "extracted_learning": {"type": ["string", "null"]}
+  }
+}
