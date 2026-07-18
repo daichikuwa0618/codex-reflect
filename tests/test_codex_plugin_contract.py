@@ -23,6 +23,7 @@ SKILL_BODY = (
     "`systemMessage` and do not edit files."
 )
 PROBE_COMMAND = 'python3 "${PLUGIN_ROOT}/scripts/capability_probe_hook.py"'
+CAPTURE_COMMAND = 'python3 "${PLUGIN_ROOT}/scripts/capture_learning.py"'
 
 
 class TestCodexPluginContract(unittest.TestCase):
@@ -72,8 +73,11 @@ class TestCodexPluginContract(unittest.TestCase):
             "startup|resume|clear|compact",
         )
 
-        for groups in hook_groups.values():
-            for group in groups:
+        user_prompt_handler = hook_groups["UserPromptSubmit"][0]["hooks"][0]
+        self.assertEqual(user_prompt_handler["command"], CAPTURE_COMMAND)
+
+        for event_name in ("PreCompact", "PostToolUse", "SessionStart"):
+            for group in hook_groups[event_name]:
                 for handler in group["hooks"]:
                     self.assertEqual(handler["type"], "command")
                     self.assertEqual(handler["command"], PROBE_COMMAND)

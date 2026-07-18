@@ -50,7 +50,12 @@ def run_bash_script(script_path: Path, stdin: str = "", args: list = None) -> tu
     return result.stdout, result.stderr, result.returncode
 
 
-def run_python_script(script_path: Path, stdin: str = "", args: list = None) -> tuple:
+def run_python_script(
+    script_path: Path,
+    stdin: str = "",
+    args: list = None,
+    env: dict = None,
+) -> tuple:
     """Run a Python script and return (stdout, stderr, returncode)."""
     cmd = [sys.executable, str(script_path)] + (args or [])
     result = subprocess.run(
@@ -59,8 +64,116 @@ def run_python_script(script_path: Path, stdin: str = "", args: list = None) -> 
         capture_output=True,
         text=True,
         cwd=str(SCRIPTS_DIR),
+        env=env,
     )
     return result.stdout, result.stderr, result.returncode
+
+
+class TestCaptureLearning(unittest.TestCase):
+    """Tests for the Codex UserPromptSubmit capture hook."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_root = Path(self.temp_dir.name)
+        self.codex_home = self.temp_root / "codex-home"
+        self.project = self.temp_root / "project"
+        self.codex_home.mkdir()
+        self.project.mkdir()
+        self.env = os.environ.copy()
+        self.env["CODEX_HOME"] = str(self.codex_home)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def run_capture(self, payload):
+        return run_python_script(
+            PYTHON_SCRIPTS["capture_learning"],
+            stdin=json.dumps(payload),
+            env=self.env,
+        )
+
+    def queue_paths(self):
+        return list(
+            (self.codex_home / "codex-reflect" / "projects").glob(
+                "*/queue.json"
+            )
+        ) if (self.codex_home / "codex-reflect" / "projects").exists() else []
+
+    def test_codex_prompt_is_appended_once_to_project_queue(self):
+        payload = {
+            "hook_event_name": "UserPromptSubmit",
+            "cwd": str(self.project),
+            "session_id": "session-1",
+            "turn_id": "turn-1",
+            "model": "gpt-test",
+            "prompt": "remember: run focused tests",
+        }
+
+        stdout, stderr, code = self.run_capture(payload)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+        self.assertEqual(
+            json.loads(stdout),
+            {
+                "continue": True,
+                "systemMessage": (
+                    "codex-reflect captured a learning candidate"
+                ),
+            },
+        )
+        self.assertEqual(len(self.queue_paths()), 1)
+        items = json.loads(self.queue_paths()[0].read_text(encoding="utf-8"))
+        self.assertEqual(len(items), 1)
+        item = items[0]
+        self.assertEqual(item["schema_version"], 1)
+        self.assertEqual(item["message"], payload["prompt"])
+        self.assertEqual(item["project"], str(self.project))
+        self.assertEqual(item["session_id"], "session-1")
+        self.assertEqual(item["turn_id"], "turn-1")
+        self.assertEqual(item["model"], "gpt-test")
+        self.assertEqual(item["source"], "hook")
+
+    def test_message_fallback_is_not_treated_as_prompt(self):
+        stdout, stderr, code = self.run_capture({
+            "hook_event_name": "UserPromptSubmit",
+            "cwd": str(self.project),
+            "message": "remember: this is not the Codex prompt field",
+        })
+
+        self.assertEqual((stdout, stderr, code), ("", "", 0))
+        self.assertEqual(self.queue_paths(), [])
+
+    def test_non_actionable_prompt_has_no_output_or_state_write(self):
+        stdout, stderr, code = self.run_capture({
+            "hook_event_name": "UserPromptSubmit",
+            "cwd": str(self.project),
+            "prompt": "Please explain this function",
+        })
+
+        self.assertEqual((stdout, stderr, code), ("", "", 0))
+        self.assertFalse((self.codex_home / "codex-reflect").exists())
+
+    def test_storage_failure_warns_and_does_not_block_turn(self):
+        first_stdout, first_stderr, first_code = self.run_capture({
+            "hook_event_name": "UserPromptSubmit",
+            "cwd": str(self.project),
+            "prompt": "remember: first candidate",
+        })
+        self.assertEqual(first_code, 0, first_stdout + first_stderr)
+        queue_path = self.queue_paths()[0]
+        queue_path.write_text("{broken", encoding="utf-8")
+
+        stdout, stderr, code = self.run_capture({
+            "hook_event_name": "UserPromptSubmit",
+            "cwd": str(self.project),
+            "prompt": "remember: second candidate",
+        })
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout, "")
+        self.assertIn("Warning: capture_learning.py error:", stderr)
+        self.assertEqual(queue_path.read_text(encoding="utf-8"), "{broken")
 
 
 class TestPostCommitReminder(unittest.TestCase):

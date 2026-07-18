@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${PLUGIN_ROOT}/scripts/capability_probe_hook.py\""
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/capture_learning.py\""
           }
         ]
       }

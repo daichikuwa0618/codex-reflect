@@ -737,14 +737,23 @@ def create_queue_item(
     confidence: float,
     sentiment: str,
     decay_days: int,
-    project: Optional[str] = None
+    project: Optional[str] = None,
+    session_id: str = "",
+    turn_id: Optional[str] = None,
+    model: Optional[str] = None,
+    source: str = "",
 ) -> Dict[str, Any]:
     """Create a properly formatted queue item."""
     return {
+        "schema_version": 1,
         "type": item_type,
         "message": message,
         "timestamp": iso_timestamp(),
-        "project": project or os.getcwd(),
+        "project": project if project is not None else os.getcwd(),
+        "session_id": session_id,
+        "turn_id": turn_id,
+        "model": model,
+        "source": source,
         "patterns": patterns,
         "confidence": confidence,
         "sentiment": sentiment,
