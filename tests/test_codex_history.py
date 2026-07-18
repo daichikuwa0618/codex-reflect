@@ -136,6 +136,52 @@ class TestCodexHistory(unittest.TestCase):
 
         self.assertEqual(result.tool_outputs, ['{"error": "TOKEN=[REDACTED]"}'])
 
+    def test_structured_tool_output_redacts_nested_secret_keys(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "structured-output.jsonl"
+            records = [
+                {"type": "session_meta", "payload": {"id": "s1"}},
+                {"type": "turn_context", "payload": {}},
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call_output",
+                        "output": {
+                            "token": "top-secret",
+                            "nested": {
+                                "password": "secret phrase",
+                                "safe": "keep this",
+                            },
+                            "items": [
+                                {"api_key": "nested-secret"},
+                                {"count": 3},
+                            ],
+                        },
+                    },
+                },
+            ]
+            path.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+
+            result = parse_transcript(path)
+
+        self.assertEqual(
+            json.loads(result.tool_outputs[0]),
+            {
+                "token": "[REDACTED]",
+                "nested": {
+                    "password": "[REDACTED]",
+                    "safe": "keep this",
+                },
+                "items": [
+                    {"api_key": "[REDACTED]"},
+                    {"count": 3},
+                ],
+            },
+        )
+
     def test_invalid_jsonl_reports_line_number(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "broken.jsonl"
@@ -171,7 +217,65 @@ class TestCodexHistory(unittest.TestCase):
 
             files = list_session_files(codex_home)
 
-        self.assertEqual(files, sorted([active, archived]))
+        self.assertEqual(files, sorted([active.resolve(), archived.resolve()]))
+
+    def test_session_enumeration_skips_symlinked_history_root(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            codex_home = root / "codex-home"
+            external_sessions = root / "external-sessions"
+            external_sessions.mkdir()
+            external_file = external_sessions / "outside.jsonl"
+            external_file.write_text("", encoding="utf-8")
+            codex_home.mkdir()
+            self._symlink_or_skip(
+                codex_home / "sessions",
+                external_sessions,
+                target_is_directory=True,
+            )
+            archived = codex_home / "archived_sessions" / "inside.jsonl"
+            archived.parent.mkdir()
+            archived.write_text("", encoding="utf-8")
+
+            files = list_session_files(codex_home)
+
+        self.assertEqual(files, [archived.resolve()])
+
+    def test_session_enumeration_rejects_external_file_symlink(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            codex_home = root / "codex-home"
+            sessions = codex_home / "sessions"
+            sessions.mkdir(parents=True)
+            external = root / "outside.jsonl"
+            external.write_text("", encoding="utf-8")
+            self._symlink_or_skip(sessions / "linked.jsonl", external)
+
+            files = list_session_files(codex_home)
+
+        self.assertEqual(files, [])
+
+    def test_session_enumeration_deduplicates_canonical_file_and_link_aliases(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            codex_home = root / "codex-home"
+            active = codex_home / "sessions" / "active.jsonl"
+            active.parent.mkdir(parents=True)
+            active.write_text("", encoding="utf-8")
+            archive = codex_home / "archived_sessions"
+            archive.mkdir()
+            self._symlink_or_skip(archive / "alias-one.jsonl", active)
+            self._symlink_or_skip(archive / "alias-two.jsonl", active)
+
+            files = list_session_files(codex_home)
+
+        self.assertEqual(files, [active.resolve()])
+
+    def _symlink_or_skip(self, link, target, target_is_directory=False):
+        try:
+            link.symlink_to(target, target_is_directory=target_is_directory)
+        except OSError as error:
+            self.skipTest("symlinks unavailable: {}".format(type(error).__name__))
 
 
 class TestSecretRedaction(unittest.TestCase):
@@ -198,6 +302,26 @@ class TestSecretRedaction(unittest.TestCase):
         self.assertNotIn("sk-proj-", redacted)
         self.assertNotIn("github_pat_", redacted)
         self.assertEqual(redacted.count("[REDACTED]"), 3)
+
+    def test_redacts_complete_quoted_assignment_value(self):
+        self.assertEqual(
+            redact_secrets('password="secret phrase"'),
+            'password="[REDACTED]"',
+        )
+
+    def test_redacts_json_style_secret_assignment(self):
+        self.assertEqual(
+            redact_secrets('{"token": "structured-secret"}'),
+            '{"token": "[REDACTED]"}',
+        )
+
+    def test_redacts_entire_bearer_assignment_without_suffix_leak(self):
+        redacted = redact_secrets(
+            "Authorization=Bearer fake-secret-value"
+        )
+
+        self.assertEqual(redacted, "Authorization=[REDACTED]")
+        self.assertNotIn("fake-secret-value", redacted)
 
     def test_does_not_redact_non_secret_assignments(self):
         self.assertEqual(redact_secrets("COUNT=3 MODE=test"), "COUNT=3 MODE=test")

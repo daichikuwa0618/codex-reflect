@@ -30,6 +30,16 @@ from lib.reflect_utils import (
 )
 
 
+def _warn_skipped_transcript(path: Path, error: Exception) -> None:
+    """Warn without echoing transcript content or parser error details."""
+    print(
+        "Warning: skipped transcript {} ({})".format(
+            path, type(error).__name__
+        ),
+        file=sys.stderr,
+    )
+
+
 def find_session_files(project_dir: str = None, all_projects: bool = False) -> list:
     """Find active and archived Codex session files to scan."""
     session_files = list_session_files()
@@ -43,7 +53,11 @@ def find_session_files(project_dir: str = None, all_projects: bool = False) -> l
     )
     matching = []
     for session_file in session_files:
-        result = parse_transcript(session_file)
+        try:
+            result = parse_transcript(session_file)
+        except (OSError, ValueError) as error:
+            _warn_skipped_transcript(session_file, error)
+            continue
         if not result.supported or not result.cwd:
             continue
         cwd = os.path.normcase(
@@ -114,10 +128,14 @@ def main() -> int:
             print(f"Warning: Session file not found: {session_file}", file=sys.stderr)
             continue
 
-        errors = extract_tool_errors(
-            session_file,
-            project_specific_only=not args.include_all
-        )
+        try:
+            errors = extract_tool_errors(
+                session_file,
+                project_specific_only=not args.include_all
+            )
+        except (OSError, ValueError) as error:
+            _warn_skipped_transcript(session_file, error)
+            continue
         all_errors.extend(errors)
 
     if not all_errors:

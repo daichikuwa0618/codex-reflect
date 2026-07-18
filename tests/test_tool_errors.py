@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Tests for tool error extraction functionality."""
 import json
+import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 # Add scripts directory to path
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -18,6 +22,7 @@ from lib.reflect_utils import (
     TOOL_ERROR_EXCLUDE_PATTERNS,
     PROJECT_SPECIFIC_ERROR_PATTERNS,
 )
+import extract_tool_errors as extract_tool_errors_script
 
 
 class TestToolErrorPatterns(unittest.TestCase):
@@ -59,12 +64,22 @@ class TestExtractToolErrors(unittest.TestCase):
     def _create_session_file(self, outputs, output_type="custom_tool_call_output"):
         """Create a supported, sanitized Codex session JSONL file."""
         session_file = Path(self.temp_dir) / "test_session.jsonl"
+        self._write_session(session_file, outputs, output_type=output_type)
+        return session_file
+
+    def _write_session(
+        self,
+        session_file,
+        outputs,
+        output_type="custom_tool_call_output",
+        cwd="/repo",
+    ):
         entries = [
             {
                 "type": "session_meta",
                 "payload": {
                     "id": "session-1",
-                    "cwd": "/repo",
+                    "cwd": cwd,
                     "timestamp": "2026-07-18T00:00:00Z",
                 },
             },
@@ -80,7 +95,6 @@ class TestExtractToolErrors(unittest.TestCase):
             "".join(json.dumps(entry) + "\n" for entry in entries),
             encoding="utf-8",
         )
-        return session_file
 
     def test_extract_empty_file(self):
         """Test extraction from empty file."""
@@ -202,6 +216,65 @@ class TestExtractToolErrors(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertNotIn("secret-value", result[0]["content"])
         self.assertIn("API_KEY=[REDACTED]", result[0]["content"])
+
+    def test_project_scan_skips_malformed_session_and_keeps_valid_neighbors(self):
+        codex_home = Path(self.temp_dir) / "codex-home"
+        sessions = codex_home / "sessions"
+        sessions.mkdir(parents=True)
+        project = Path(self.temp_dir) / "project"
+        project.mkdir()
+        before = sessions / "a-valid.jsonl"
+        malformed = sessions / "b-malformed.jsonl"
+        after = sessions / "c-valid.jsonl"
+        self._write_session(before, ["first"], cwd=str(project))
+        malformed.write_text("TOP_SECRET=must-not-be-logged\n", encoding="utf-8")
+        self._write_session(after, ["second"], cwd=str(project))
+        stderr = StringIO()
+
+        with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}), redirect_stderr(stderr):
+            files = extract_tool_errors_script.find_session_files(
+                str(project), all_projects=False
+            )
+
+        self.assertEqual(files, [before.resolve(), after.resolve()])
+        warning = stderr.getvalue()
+        self.assertIn(str(malformed), warning)
+        self.assertIn("ValueError", warning)
+        self.assertNotIn("TOP_SECRET", warning)
+        self.assertNotIn("must-not-be-logged", warning)
+
+    def test_main_skips_malformed_explicit_file_and_aggregates_valid_files(self):
+        root = Path(self.temp_dir)
+        before = root / "a-valid.jsonl"
+        malformed = root / "b-malformed.jsonl"
+        after = root / "c-valid.jsonl"
+        self._write_session(before, ["Connection refused before"])
+        malformed.write_text("TOKEN=must-not-be-logged\n", encoding="utf-8")
+        self._write_session(after, ["Connection refused after"])
+        stdout = StringIO()
+        stderr = StringIO()
+        argv = [
+            "extract_tool_errors.py",
+            str(before),
+            str(malformed),
+            str(after),
+            "--min-count",
+            "1",
+            "--json",
+        ]
+
+        with patch.object(sys, "argv", argv), redirect_stdout(stdout), redirect_stderr(stderr):
+            exit_code = extract_tool_errors_script.main()
+
+        self.assertEqual(exit_code, 0)
+        results = json.loads(stdout.getvalue())
+        self.assertEqual(results[0]["error_type"], "connection_refused")
+        self.assertEqual(results[0]["count"], 2)
+        warning = stderr.getvalue()
+        self.assertIn(str(malformed), warning)
+        self.assertIn("ValueError", warning)
+        self.assertNotIn("TOKEN", warning)
+        self.assertNotIn("must-not-be-logged", warning)
 
 
 class TestAggregateToolErrors(unittest.TestCase):

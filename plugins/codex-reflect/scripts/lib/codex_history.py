@@ -1,11 +1,12 @@
 """Adapter for the confirmed Codex JSONL transcript schema."""
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .codex_paths import get_codex_home
-from .redaction import redact_secrets
+from .redaction import redact_secrets, redact_structure
 
 
 KNOWN_RECORD_TYPES = {
@@ -83,8 +84,10 @@ def _append_custom_tool_output(outputs: List[str], payload: Dict[str, Any]) -> N
         outputs.append(redact_secrets(output))
     elif output is not None:
         outputs.append(
-            redact_secrets(
-                json.dumps(output, ensure_ascii=False, sort_keys=True)
+            json.dumps(
+                redact_structure(output),
+                ensure_ascii=False,
+                sort_keys=True,
             )
         )
 
@@ -146,9 +149,26 @@ def parse_transcript(path: Path) -> TranscriptResult:
 def list_session_files(codex_home: Optional[Path] = None) -> List[Path]:
     """Enumerate active and archived JSONL transcripts in stable path order."""
     root = Path(codex_home) if codex_home is not None else get_codex_home()
-    files: List[Path] = []
+    files: Dict[str, Path] = {}
     for directory_name in ("sessions", "archived_sessions"):
         directory = root / directory_name
-        if directory.is_dir():
-            files.extend(directory.rglob("*.jsonl"))
-    return sorted(files)
+        if directory.is_symlink() or not directory.is_dir():
+            continue
+        try:
+            authorized_root = directory.resolve(strict=True)
+        except OSError:
+            continue
+        for candidate in directory.rglob("*.jsonl"):
+            if candidate.is_symlink():
+                continue
+            try:
+                if not candidate.is_file():
+                    continue
+                canonical = candidate.resolve(strict=True)
+                canonical.relative_to(authorized_root)
+            except (OSError, ValueError):
+                continue
+            key = os.path.normcase(str(canonical))
+            if key not in files:
+                files[key] = canonical
+    return [files[key] for key in sorted(files)]
