@@ -18,6 +18,7 @@ SKILL_BODY = (
 )
 FINAL_SKILL_SCRIPTS = {
     "reflect": ("../../scripts/commands/reflect.py",),
+    "reflect-skills": ("../../scripts/commands/reflect_skills.py",),
     "view-queue": ("../../scripts/read_queue.py",),
     "skip-reflect": (
         "../../scripts/read_queue.py",
@@ -70,6 +71,24 @@ class TestCodexPluginContract(unittest.TestCase):
             "final confirmation",
             "AGENTS.md",
             "queue",
+        ):
+            with self.subTest(keyword=keyword):
+                self.assertIn(keyword, body)
+
+    def test_reflect_skills_skill_contains_discovery_and_write_gates(self):
+        body = (
+            PLUGIN_ROOT / "skills" / "reflect-skills" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        for keyword in (
+            "multi-step intent",
+            "multiple sessions",
+            "improvement",
+            "evidence count",
+            "source projects",
+            "final confirmation",
+            ".agents/skills",
+            "dry-run",
+            "read-only",
         ):
             with self.subTest(keyword=keyword):
                 self.assertIn(keyword, body)
