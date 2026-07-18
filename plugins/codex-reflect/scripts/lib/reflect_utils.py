@@ -10,24 +10,16 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 
+from .codex_paths import get_project_state_dir
+from .state_store import StateStore
+
 # =============================================================================
 # Path utilities
 # =============================================================================
 
 def get_queue_path(project_dir: Optional[str] = None) -> Path:
-    """Get path to learnings queue file, scoped to the current project.
-
-    Queue files are stored per-project to prevent cross-project leakage:
-      ~/.claude/projects/<encoded>/learnings-queue.json
-
-    Falls back to global path if project directory cannot be determined.
-    """
-    try:
-        folder_name = get_project_folder_name(project_dir)
-        return get_claude_dir() / "projects" / folder_name / "learnings-queue.json"
-    except Exception:
-        # Fallback to global path if encoding fails
-        return Path.home() / ".claude" / "learnings-queue.json"
+    """Get the current project's queue path below the Codex state root."""
+    return get_project_state_dir(project_dir) / "queue.json"
 
 
 def get_global_queue_path() -> Path:
@@ -73,7 +65,12 @@ def migrate_global_queue() -> None:
         if not project:
             continue
         try:
-            project_queue_path = get_queue_path(project)
+            project_queue_path = (
+                get_claude_dir()
+                / "projects"
+                / get_project_folder_name(project)
+                / "learnings-queue.json"
+            )
             # Merge with any existing project queue
             existing = []
             if project_queue_path.exists():
@@ -95,9 +92,9 @@ def migrate_global_queue() -> None:
     global_path.unlink(missing_ok=True)
 
 
-def get_backup_dir() -> Path:
-    """Get path to learnings backup directory."""
-    return Path.home() / ".claude" / "learnings-backups"
+def get_backup_dir(project_dir: Optional[str] = None) -> Path:
+    """Get the current project's queue backup directory."""
+    return get_project_state_dir(project_dir) / "backups"
 
 
 def get_claude_dir() -> Path:
@@ -470,34 +467,18 @@ def read_all_memory_entries(
 # =============================================================================
 
 def load_queue(project_dir: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Load learnings queue from the project-scoped file.
-
-    On first call, migrates any items from the legacy global queue.
-    """
-    # Migrate legacy global queue if it has items
-    migrate_global_queue()
-
-    path = get_queue_path(project_dir)
-    if not path.exists():
-        return []
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, IOError):
-        return []
+    """Load the current project's queue from shared Codex state."""
+    return StateStore(get_project_state_dir(project_dir)).load()
 
 
 def save_queue(items: List[Dict[str, Any]], project_dir: Optional[str] = None) -> None:
-    """Save learnings queue to the project-scoped file."""
-    path = get_queue_path(project_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    """Atomically save the current project's queue."""
+    StateStore(get_project_state_dir(project_dir)).save(items)
 
 
 def append_to_queue(item: Dict[str, Any], project_dir: Optional[str] = None) -> None:
-    """Append a single item to the project-scoped queue."""
-    items = load_queue(project_dir)
-    items.append(item)
-    save_queue(items, project_dir)
+    """Append one item while holding the project queue lock."""
+    StateStore(get_project_state_dir(project_dir)).append(item)
 
 
 # =============================================================================

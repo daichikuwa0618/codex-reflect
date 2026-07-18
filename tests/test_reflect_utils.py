@@ -17,7 +17,6 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from lib.reflect_utils import (
     get_queue_path,
     get_backup_dir,
-    get_claude_dir,
     load_queue,
     save_queue,
     append_to_queue,
@@ -32,7 +31,6 @@ from lib.reflect_utils import (
     should_include_message,
     EXCLUDED_DIRS,
     _parse_rule_frontmatter,
-    get_project_folder_name,
 )
 
 
@@ -41,40 +39,34 @@ class TestPathUtilities(unittest.TestCase):
 
     def test_get_queue_path(self):
         """Test queue path returns correct per-project location."""
-        path = get_queue_path()
-        self.assertIsInstance(path, Path)
-        self.assertEqual(path.name, "learnings-queue.json")
-        # Queue is now per-project: ~/.claude/projects/<encoded>/learnings-queue.json
-        self.assertIn("projects", path.parts)
+        with tempfile.TemporaryDirectory() as root, patch.dict(
+            os.environ, {"CODEX_HOME": root}
+        ):
+            path = get_queue_path()
+            self.assertIsInstance(path, Path)
+            self.assertEqual(path.name, "queue.json")
+            self.assertEqual(path.parents[2], Path(root).resolve() / "codex-reflect")
 
     def test_get_queue_path_explicit_project(self):
         """Test queue path with explicit project directory."""
-        path = get_queue_path("/tmp/test-project")
-        self.assertIsInstance(path, Path)
-        self.assertEqual(path.name, "learnings-queue.json")
-        self.assertIn("projects", path.parts)
-        self.assertIn("-tmp-test-project", str(path))
-
-    def test_get_global_queue_path(self):
-        """Test legacy global queue path."""
-        from lib.reflect_utils import get_global_queue_path
-        path = get_global_queue_path()
-        self.assertIsInstance(path, Path)
-        self.assertEqual(path.name, "learnings-queue.json")
-        self.assertEqual(path.parent.name, ".claude")
+        with tempfile.TemporaryDirectory() as root, patch.dict(
+            os.environ, {"CODEX_HOME": root}
+        ):
+            path = get_queue_path("/tmp/test-project")
+            self.assertIsInstance(path, Path)
+            self.assertEqual(path.name, "queue.json")
+            self.assertEqual(path.parent.parent.name, "projects")
+            self.assertRegex(path.parent.name, r"^[a-f0-9]{16}$")
 
     def test_get_backup_dir(self):
         """Test backup dir returns correct location."""
-        path = get_backup_dir()
-        self.assertIsInstance(path, Path)
-        self.assertEqual(path.name, "learnings-backups")
-        self.assertEqual(path.parent.name, ".claude")
-
-    def test_get_claude_dir(self):
-        """Test claude dir returns correct location."""
-        path = get_claude_dir()
-        self.assertIsInstance(path, Path)
-        self.assertEqual(path.name, ".claude")
+        with tempfile.TemporaryDirectory() as root, patch.dict(
+            os.environ, {"CODEX_HOME": root}
+        ):
+            path = get_backup_dir("/tmp/test-project")
+            self.assertIsInstance(path, Path)
+            self.assertEqual(path.name, "backups")
+            self.assertEqual(path.parent.parent.name, "projects")
 
 
 class TestQueueOperations(unittest.TestCase):
@@ -83,34 +75,34 @@ class TestQueueOperations(unittest.TestCase):
     def setUp(self):
         """Create temporary directory for tests."""
         self.temp_dir = tempfile.mkdtemp()
-        self.test_queue_path = Path(self.temp_dir) / "learnings-queue.json"
+        self.test_queue_path = Path(self.temp_dir) / "queue.json"
 
     def tearDown(self):
         """Clean up temporary files."""
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    @patch("lib.reflect_utils.get_queue_path")
-    def test_load_queue_empty_file(self, mock_path):
+    @patch("lib.reflect_utils.get_project_state_dir")
+    def test_load_queue_empty_file(self, mock_state_dir):
         """Test loading empty queue."""
-        mock_path.return_value = self.test_queue_path
+        mock_state_dir.return_value = Path(self.temp_dir)
         result = load_queue()
         self.assertEqual(result, [])
 
-    @patch("lib.reflect_utils.get_queue_path")
-    def test_load_queue_with_items(self, mock_path):
+    @patch("lib.reflect_utils.get_project_state_dir")
+    def test_load_queue_with_items(self, mock_state_dir):
         """Test loading queue with items."""
-        mock_path.return_value = self.test_queue_path
+        mock_state_dir.return_value = Path(self.temp_dir)
         test_items = [{"type": "auto", "message": "test"}]
         self.test_queue_path.write_text(json.dumps(test_items))
 
         result = load_queue()
         self.assertEqual(result, test_items)
 
-    @patch("lib.reflect_utils.get_queue_path")
-    def test_save_queue(self, mock_path):
+    @patch("lib.reflect_utils.get_project_state_dir")
+    def test_save_queue(self, mock_state_dir):
         """Test saving queue."""
-        mock_path.return_value = self.test_queue_path
+        mock_state_dir.return_value = Path(self.temp_dir)
         test_items = [{"type": "auto", "message": "test"}]
 
         save_queue(test_items)
@@ -118,10 +110,10 @@ class TestQueueOperations(unittest.TestCase):
         saved_data = json.loads(self.test_queue_path.read_text())
         self.assertEqual(saved_data, test_items)
 
-    @patch("lib.reflect_utils.get_queue_path")
-    def test_append_to_queue(self, mock_path):
+    @patch("lib.reflect_utils.get_project_state_dir")
+    def test_append_to_queue(self, mock_state_dir):
         """Test appending to queue."""
-        mock_path.return_value = self.test_queue_path
+        mock_state_dir.return_value = Path(self.temp_dir)
         self.test_queue_path.write_text("[]")
 
         item = {"type": "auto", "message": "new item"}
