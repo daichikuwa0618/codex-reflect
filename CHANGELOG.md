@@ -5,7 +5,7 @@ All notable changes to codex-reflect and its upstream history are documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [4.0.0-rc.1] - 2026-07-18
+## [4.0.0-rc.1] - 2026-07-19
 
 ### Added
 - Codex Plugin marketplace package with fork-original `reflect`, `reflect-skills`, `view-queue`, and `skip-reflect` Skill names.
@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 - Legacy runtime manifests, shell scripts, old command files, old state migration, and direct generated-memory integration.
+
+### Fixed
+- Applied date and project filters from session metadata before parsing transcript bodies.
+- Excluded Codex-injected `AGENTS.md`, Plugin, and environment context from learning candidates.
+- Deduplicated unknown record-type warnings within each transcript.
 
 ### Known limitations
 - Some hosted or specialized tools are not observable through Plugin Hooks.
