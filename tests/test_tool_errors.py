@@ -238,7 +238,7 @@ class TestExtractToolErrors(unittest.TestCase):
 
         self.assertEqual(files, [before.resolve(), after.resolve()])
         warning = stderr.getvalue()
-        self.assertIn(str(malformed), warning)
+        self.assertIn(malformed.name, warning)
         self.assertIn("ValueError", warning)
         self.assertNotIn("TOP_SECRET", warning)
         self.assertNotIn("must-not-be-logged", warning)
@@ -293,8 +293,17 @@ class TestExtractToolErrors(unittest.TestCase):
         )
         self._write_session(after, ["second"], cwd=str(project))
         stderr = StringIO()
+        original_expanduser = Path.expanduser
 
-        with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}), redirect_stderr(stderr):
+        def expanduser(path):
+            if str(path) == "~definitely_missing_user":
+                raise RuntimeError("unexpandable user home")
+            return original_expanduser(path)
+
+        with patch.object(Path, "expanduser", expanduser), patch.dict(
+            os.environ,
+            {"CODEX_HOME": str(codex_home)},
+        ), redirect_stderr(stderr):
             files = extract_tool_errors_script.find_session_files(
                 str(project), all_projects=False
             )
