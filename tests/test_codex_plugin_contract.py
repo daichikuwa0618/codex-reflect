@@ -16,7 +16,8 @@ SKILL_BODY = (
     "Report that this workflow is not available in this build. "
     "Do not run scripts or edit files."
 )
-QUEUE_SKILL_SCRIPTS = {
+FINAL_SKILL_SCRIPTS = {
+    "reflect": ("../../scripts/commands/reflect.py",),
     "view-queue": ("../../scripts/read_queue.py",),
     "skip-reflect": (
         "../../scripts/read_queue.py",
@@ -48,12 +49,30 @@ class TestCodexPluginContract(unittest.TestCase):
             _, frontmatter, body = skill_text.split("---", maxsplit=2)
             self.assertIn(f"name: {skill_name}\n", frontmatter)
             self.assertRegex(frontmatter, r"(?m)^description: Use when .+$")
-            if skill_name in QUEUE_SKILL_SCRIPTS:
+            if skill_name in FINAL_SKILL_SCRIPTS:
                 self.assertNotEqual(body.strip(), SKILL_BODY)
-                for script in QUEUE_SKILL_SCRIPTS[skill_name]:
+                for script in FINAL_SKILL_SCRIPTS[skill_name]:
                     self.assertIn(script, body)
             else:
                 self.assertEqual(body.strip(), SKILL_BODY)
+
+    def test_reflect_skill_contains_review_and_write_gates(self):
+        body = (
+            PLUGIN_ROOT / "skills" / "reflect" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        for keyword in (
+            "dry-run",
+            "scan-history",
+            "apply all",
+            "select",
+            "details",
+            "skip",
+            "final confirmation",
+            "AGENTS.md",
+            "queue",
+        ):
+            with self.subTest(keyword=keyword):
+                self.assertIn(keyword, body)
 
     def test_repository_marketplace_contract(self):
         self.assertTrue(MARKETPLACE_PATH.is_file(), f"missing {MARKETPLACE_PATH}")
