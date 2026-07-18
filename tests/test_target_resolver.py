@@ -189,6 +189,49 @@ class TestTargetResolver(unittest.TestCase):
 
         self.assertEqual(target, self.cwd / "AGENTS.override.md")
 
+    def test_active_instruction_file_returns_canonical_file_symlink_target(self):
+        external = (
+            Path(self.temp_dir.name).resolve()
+            / "external-guidance"
+            / "AGENTS.md"
+        )
+        self.write(external, "external")
+        instruction = self.cwd / "AGENTS.md"
+        try:
+            instruction.symlink_to(external)
+        except (NotImplementedError, OSError) as error:
+            self.skipTest("symlink unavailable: {}".format(error))
+
+        target = self.resolver.active_instruction_file(self.cwd)
+
+        self.assertEqual(target, external.resolve())
+
+    def test_symlinked_instruction_directory_returns_canonical_active_target(self):
+        external = Path(self.temp_dir.name).resolve() / "external-active"
+        self.write(external / "AGENTS.md", "external")
+        linked = self.repo / "linked-active"
+        try:
+            linked.symlink_to(external, target_is_directory=True)
+        except (NotImplementedError, OSError) as error:
+            self.skipTest("symlink unavailable: {}".format(error))
+
+        target = self.resolver.suggest_instruction_target("linked", linked)
+
+        self.assertEqual(target, external.resolve() / "AGENTS.md")
+
+    def test_symlinked_instruction_directory_proposes_canonical_external_path(self):
+        external = Path(self.temp_dir.name).resolve() / "external-proposal"
+        external.mkdir()
+        linked = self.repo / "linked-proposal"
+        try:
+            linked.symlink_to(external, target_is_directory=True)
+        except (NotImplementedError, OSError) as error:
+            self.skipTest("symlink unavailable: {}".format(error))
+
+        target = self.resolver.suggest_instruction_target("linked", linked)
+
+        self.assertEqual(target, external.resolve() / "AGENTS.md")
+
     def test_path_specific_learning_prefers_nearest_parent_agents(self):
         self.write(self.repo / "src" / "AGENTS.md", "src")
 

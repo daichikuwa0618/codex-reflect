@@ -39,7 +39,7 @@ class TargetResolver:
             if not stat.S_ISREG(mode):
                 continue
             if candidate.read_text(encoding="utf-8").strip():
-                return candidate
+                return candidate.resolve()
         return None
 
     def user_skill_root(self) -> Path:
@@ -155,11 +155,24 @@ class TargetResolver:
             and os.access(path, os.W_OK)
         )
 
+    @staticmethod
+    def _safe_authoring_root(root: Path) -> Optional[Path]:
+        lexical = Path(os.path.abspath(os.path.normpath(str(root))))
+        try:
+            canonical = root.resolve()
+        except (OSError, RuntimeError):
+            return None
+        return canonical if canonical == lexical else None
+
     def suggest_skill_target(self, skill_path, repo_root) -> TargetSuggestion:
         skill_path = Path(skill_path).expanduser().resolve()
-        writable_roots = (
-            self.user_skill_root().resolve(),
-            self.repo_skill_root(repo_root).resolve(),
+        writable_roots = tuple(
+            safe_root
+            for safe_root in (
+                self._safe_authoring_root(self.user_skill_root()),
+                self._safe_authoring_root(self.repo_skill_root(repo_root)),
+            )
+            if safe_root is not None
         )
         read_only = not (
             any(self._is_within(skill_path, root) for root in writable_roots)

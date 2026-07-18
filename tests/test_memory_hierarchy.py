@@ -217,6 +217,44 @@ class TestReadOnlyPluginSkill(ResolverTestCase):
         self.assertEqual(suggestion.path, external.resolve())
         self.assertTrue(suggestion.read_only)
 
+    def test_repo_authoring_root_symlink_to_external_is_suggested_read_only(self):
+        external_root = Path(self.temp_dir.name).resolve() / "external-repo-skills"
+        external = external_root / "review" / "SKILL.md"
+        self.write(external, "# External review")
+        authoring_root = self.repo / ".agents" / "skills"
+        authoring_root.parent.mkdir(parents=True)
+        try:
+            authoring_root.symlink_to(external_root, target_is_directory=True)
+        except (NotImplementedError, OSError) as error:
+            self.skipTest("symlink unavailable: {}".format(error))
+        skill = authoring_root / "review" / "SKILL.md"
+
+        suggestion = self.resolver.suggest_target(
+            "skill", cwd=self.nested, skill_path=skill
+        )
+
+        self.assertEqual(suggestion.path, external.resolve())
+        self.assertTrue(suggestion.read_only)
+
+    def test_user_authoring_intermediate_symlink_is_suggested_read_only(self):
+        external_agents = Path(self.temp_dir.name).resolve() / "external-user-agents"
+        external = external_agents / "skills" / "review" / "SKILL.md"
+        self.write(external, "# External review")
+        agents = self.home / ".agents"
+        agents.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            agents.symlink_to(external_agents, target_is_directory=True)
+        except (NotImplementedError, OSError) as error:
+            self.skipTest("symlink unavailable: {}".format(error))
+        skill = agents / "skills" / "review" / "SKILL.md"
+
+        suggestion = self.resolver.suggest_target(
+            "skill", cwd=self.nested, skill_path=skill
+        )
+
+        self.assertEqual(suggestion.path, external.resolve())
+        self.assertTrue(suggestion.read_only)
+
 
 if __name__ == "__main__":
     unittest.main()
