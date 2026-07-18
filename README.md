@@ -2,6 +2,7 @@
 
 [![Version](https://img.shields.io/badge/version-4.0.0--rc.1-blue?style=flat-square)](plugins/codex-reflect/.codex-plugin/plugin.json)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-345%20passing-brightgreen?style=flat-square)](.github/workflows/test.yml)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square)](.github/workflows/test.yml)
 
 Codex で受けた訂正・肯定・明示的な記憶指示を queue に捕捉し、人間のレビューを経て `AGENTS.md` または再利用可能な Codex Skill に反映する Plugin です。履歴から反復 workflow を発見することもできます。
